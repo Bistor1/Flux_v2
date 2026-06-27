@@ -6,7 +6,7 @@ Modern screen color temperature control for Linux using Redshift.
 A clean, modern GUI built with CustomTkinter featuring a dark theme and violet accents.
 
 ## Original author
-The original autor of the unpublished v1 of Flux is: "Anonymus"
+The original autor of the unpublished v1 of Flux is: "CartoonRacoon"
 
 ## Features
 
