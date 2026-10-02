@@ -1,0 +1,83 @@
+id: io.github.Bistor1.FluxV2
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+command: fluxv2
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --socket=session-bus
+  - --device=dri
+  - --talk-name=org.kde.KWin
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.kde.StatusNotifierWatcher
+modules:
+  - name: tcl-tk
+    buildsystem: simple
+    sources:
+      - type: archive
+        url: https://downloads.sourceforge.net/project/tcl/Tcl/8.6.16/tcl8.6.16-src.tar.gz
+        sha256: 91cb8fa61771c63c262efb553059b7c7ad6757afa5857af6265e4b0bdc2a14a5
+        dest: tcl
+      - type: archive
+        url: https://downloads.sourceforge.net/project/tcl/Tcl/8.6.16/tk8.6.16-src.tar.gz
+        sha256: be9f94d3575d4b3099d84bc3c10de8994df2d7aa405208173c709cc404a7e5fe
+        dest: tk
+      - type: archive
+        url: https://www.python.org/ftp/python/3.14.7/Python-3.14.7.tgz
+        sha256: 62859805f6fdf25e2bcbf3fa3217801e1996887ca33e6a2af80674bdfa2dbe07
+    build-commands:
+      - cd tcl/unix && ./configure --prefix=/app --enable-shared && make -j$(nproc) && make install
+      - cd tk/unix && ./configure --prefix=/app --enable-shared --with-tcl=/app/lib && make -j$(nproc) && make install
+      - |
+        set -eu
+        suffix=$(python3 -c 'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX"))')
+        inc=$(python3 -c 'import sysconfig; print(sysconfig.get_config_var("INCLUDEPY"))')
+        mkdir -p /app/lib/python3.14/site-packages
+        gcc -shared -fPIC -O2 \
+          -I"$inc" -IInclude/internal -IModules -I/app/include \
+          Modules/_tkinter.c \
+          -L/app/lib -ltk8.6 -ltcl8.6 -lX11 \
+          -o "/app/lib/python3.14/site-packages/_tkinter${suffix}"
+        cp -a Lib/tkinter /app/lib/python3.14/site-packages/tkinter
+        chmod -R u+w /app/lib /app/bin || true
+
+  - name: python-deps
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network
+    build-commands:
+      - pip3 install --prefix=/app --no-cache-dir -r requirements.txt
+    sources:
+      - type: file
+        path: ../requirements.txt
+
+  - name: fluxv2
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 fluxv2-wrapper /app/bin/fluxv2
+      - install -Dm644 main.py /app/share/fluxv2/main.py
+      - install -Dm644 first_run.py /app/share/fluxv2/first_run.py
+      - install -Dm644 gen_icon.py /app/share/fluxv2/gen_icon.py
+      - install -Dm644 requirements.txt /app/share/fluxv2/requirements.txt
+      - install -Dm644 io.github.Bistor1.FluxV2.desktop /app/share/applications/io.github.Bistor1.FluxV2.desktop
+      - install -Dm644 io.github.Bistor1.FluxV2.metainfo.xml /app/share/metainfo/io.github.Bistor1.FluxV2.metainfo.xml
+      - mkdir -p /app/share/icons/hicolor/256x256/apps
+      - python3 gen_icon.py /app/share/icons/hicolor/256x256/apps/io.github.Bistor1.FluxV2.png
+    sources:
+      - type: file
+        path: ../main.py
+      - type: file
+        path: ../first_run.py
+      - type: file
+        path: ../gen_icon.py
+      - type: file
+        path: ../requirements.txt
+      - type: file
+        path: fluxv2-wrapper
+      - type: file
+        path: io.github.Bistor1.FluxV2.desktop
+      - type: file
+        path: io.github.Bistor1.FluxV2.metainfo.xml

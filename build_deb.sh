@@ -4,19 +4,13 @@
 
 set -euo pipefail
 
-VERSION="2.0.9"
+VERSION="2.0.10"
 PACKAGE_NAME="fluxv2"
 OUTPUT_FILE="${PACKAGE_NAME}_${VERSION}_amd64.deb"
 
 echo "==> Baue Flux v2 Debian-Paket..."
 
 # --- Pre-flight checks ---
-if ! command -v fpm &>/dev/null; then
-    echo "ERROR: fpm ist nicht installiert."
-    echo "  sudo gem install fpm"
-    exit 1
-fi
-
 if [ ! -f "main.py" ]; then
     echo "ERROR: main.py nicht gefunden. Skript im Projektverzeichnis ausführen."
     exit 1
@@ -185,24 +179,66 @@ chmod 755 "$POSTINST"
 # --- Build .deb ---
 echo "==> Baue Paket..."
 rm -f "$OUTPUT_FILE"
-fpm -s dir -t deb \
-    -n "$PACKAGE_NAME" \
-    -v "$VERSION" \
-    -a amd64 \
-    --description "Modern color temperature control with Redshift" \
-    --license "MIT" \
-    --depends "python3" \
-    --depends "python3-venv" \
-    --depends "python3-tk" \
-    --depends "python3-pil" \
-    --depends "zenity" \
-    --depends "python3-gi" \
-    --depends "gir1.2-gtk-3.0" \
-    --after-install "$POSTINST" \
-    -C "$BUILD_DIR" \
-    --exclude "postinst" \
-    -p "$OUTPUT_FILE" \
-    .
+
+build_with_fpm() {
+    fpm -s dir -t deb \
+        -n "$PACKAGE_NAME" \
+        -v "$VERSION" \
+        -a amd64 \
+        --description "Modern color temperature control" \
+        --license "MIT" \
+        --maintainer "Bistor1 <bistorhunt@gmail.com>" \
+        --depends "python3" \
+        --depends "python3-venv" \
+        --depends "python3-tk" \
+        --depends "python3-pil" \
+        --depends "zenity" \
+        --depends "python3-gi" \
+        --depends "gir1.2-gtk-3.0" \
+        --after-install "$POSTINST" \
+        -C "$BUILD_DIR" \
+        --exclude "postinst" \
+        -p "$OUTPUT_FILE" \
+        .
+}
+
+build_with_ar() {
+    # fpm is optional. A .deb is just an ar archive of control.tar.gz + data.tar.gz.
+    local stage ctrl size
+    stage=$(mktemp -d)
+    ctrl="$stage/ctrl"
+    mkdir -p "$ctrl"
+    size=$(du -sk "$BUILD_DIR" | awk '{print $1}')
+    cat > "$ctrl/control" <<EOF
+Package: ${PACKAGE_NAME}
+Version: ${VERSION}
+Architecture: amd64
+Maintainer: Bistor1 <bistorhunt@gmail.com>
+Section: utils
+Priority: optional
+Installed-Size: ${size}
+Depends: python3, python3-venv, python3-tk, python3-pil, zenity, python3-gi, gir1.2-gtk-3.0
+License: MIT
+Description: Modern color temperature control
+ Flux v2 sets the screen color temperature from a desktop slider.
+ On KDE it talks to KWin. Elsewhere it can call redshift or gammastep.
+EOF
+    cp "$POSTINST" "$ctrl/postinst"
+    chmod 755 "$ctrl/postinst"
+    tar -C "$ctrl" --owner=0 --group=0 --numeric-owner -czf "$stage/control.tar.gz" control postinst
+    tar -C "$BUILD_DIR" --owner=0 --group=0 --numeric-owner -czf "$stage/data.tar.gz" \
+        --exclude=postinst .
+    printf '2.0\n' > "$stage/debian-binary"
+    ar rcs "$OUTPUT_FILE" "$stage/debian-binary" "$stage/control.tar.gz" "$stage/data.tar.gz"
+    rm -rf "$stage"
+}
+
+if command -v fpm &>/dev/null; then
+    build_with_fpm
+else
+    echo "==> fpm nicht gefunden, baue .deb direkt mit ar/tar"
+    build_with_ar
+fi
 
 echo ""
 echo "==> Fertig!"

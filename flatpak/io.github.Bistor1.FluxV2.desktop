@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Flux v2
+Comment=Modern color temperature control
+Comment[de]=Moderne Farbtemperatur-Steuerung
+Exec=fluxv2
+Icon=io.github.Bistor1.FluxV2
+Terminal=false
+Type=Application
+Categories=Utility;Settings;
+StartupNotify=true
+Keywords=color;temperature;redshift;screen;light;night;

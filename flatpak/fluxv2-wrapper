@@ -1,0 +1,8 @@
+#!/bin/sh
+# Flatpak entry point. Dependencies and Tcl/Tk live in /app, so no venv.
+export PYTHONUNBUFFERED=1
+export LD_LIBRARY_PATH="/app/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export TCL_LIBRARY=/app/lib/tcl8.6
+export TK_LIBRARY=/app/lib/tk8.6
+export PYTHONPATH="/app/lib/python3.14/site-packages${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 /app/share/fluxv2/main.py "$@"

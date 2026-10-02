@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.Bistor1.FluxV2</id>
+  <name>Flux v2</name>
+  <summary>Modern screen color temperature control</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="io.github.bistor1">
+    <name>Bistor1</name>
+  </developer>
+  <description>
+    <p>
+      Flux v2 sets the color temperature of the screen from a dark desktop
+      window. On KDE it talks to KWin Night Light. Elsewhere it can call
+      redshift or gammastep.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.Bistor1.FluxV2.desktop</launchable>
+  <url type="homepage">https://github.com/Bistor1/Flux_v2</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="2.0.10" date="2026-10-02"/>
+  </releases>
+</component>

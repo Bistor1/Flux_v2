@@ -19,6 +19,7 @@ The original author of the unpublished v1 of Flux is: "CartoonRacoon"
 - **First-Run Setup Wizard**: On first launch, Flux v2 opens a pure-tkinter window with a live checklist that creates the venv and installs all required Python packages (customtkinter, Pillow, pystray) step-by-step
 - **Logo**: Single circular temperature-gradient icon (warm red center → orange → cool blue rim)
 - **Debian Package**: Complete `.deb` with launcher, automatic setup, and icon
+- **Flatpak**: `io.github.Bistor1.FluxV2` manifest, with Tcl/Tk bundled so it does not need the host `python3-tk`
 
 ## Requirements
 
@@ -32,7 +33,7 @@ The original author of the unpublished v1 of Flux is: "CartoonRacoon"
 ### Via .deb package (recommended)
 
 ```bash
-sudo dpkg -i fluxv2_2.0.9_amd64.deb
+sudo dpkg -i fluxv2_2.0.10_amd64.deb
 sudo apt install -f
 ```
 
@@ -60,13 +61,33 @@ python main.py
 
 Status is shown live (Active / Reset / Disabled). The temperature display recolors from warm (low K) to cool (high K).
 
-## Building the .deb package
+### Via Flatpak
+
+```bash
+./build_flatpak.sh
+flatpak install --user fluxv2_2.0.10.flatpak
+```
+
+Or install from a local build directory:
+
+```bash
+flatpak run --filesystem="$(pwd)" --share=network org.flatpak.Builder \
+  --user --install --force-clean flatpak-build flatpak/io.github.Bistor1.FluxV2.yml
+```
+
+## Building
+
+```bash
+./build.sh
+```
+
+`build.sh` builds the `.deb` and, when Flatpak is available, the Flatpak bundle.
 
 ```bash
 ./build_deb.sh
 ```
 
-Generates `fluxv2_2.0.9_amd64.deb` (requires `fpm`).
+Generates `fluxv2_2.0.10_amd64.deb`. `fpm` is used when it is installed; otherwise the script packs the archive with `ar` and `tar`.
 
 ## Technical Details
 
