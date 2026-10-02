@@ -33,7 +33,7 @@ The original author of the unpublished v1 of Flux is: "CartoonRacoon"
 ### Via .deb package (recommended)
 
 ```bash
-sudo dpkg -i fluxv2_2.0.12_amd64.deb
+sudo dpkg -i fluxv2_2.0.13_amd64.deb
 sudo apt install -f
 ```
 
@@ -65,7 +65,7 @@ Status is shown live (Active / Reset / Disabled). The temperature display recolo
 
 ```bash
 ./build_flatpak.sh
-flatpak install --user fluxv2_2.0.12.flatpak
+flatpak install --user fluxv2_2.0.13.flatpak
 ```
 
 Or install from a local build directory:
@@ -87,12 +87,13 @@ flatpak run --filesystem="$(pwd)" --share=network org.flatpak.Builder \
 ./build_deb.sh
 ```
 
-Generates `fluxv2_2.0.12_amd64.deb`. `fpm` is used when it is installed; otherwise the script packs the archive with `ar` and `tar`.
+Generates `fluxv2_2.0.13_amd64.deb`. `fpm` is used when it is installed; otherwise the script packs the archive with `ar` and `tar`.
 
 ## Technical Details
 
 - **UI Framework**: CustomTkinter (dark mode) for main app; pure `tkinter` for the setup wizard (so it can install customtkinter itself)
-- **Icon Generation**: PIL — circular red → orange → blue gradient via `gen_icon.py`
+- **Layout**: `main.py` is the entry point. The window, tray, color backends, and single-instance socket live in the `fluxv2` package
+- **Icon Generation**: PIL — circular red → orange → blue gradient via `fluxv2/icon.py` (`gen_icon.py` writes it during the build)
 - **Launcher**: Creates venv and installs dependencies automatically if needed; falls back to setup wizard for first run
 - **Single-Instance**: Unix-domain IPC socket at `~/.local/state/fluxv2/fluxv2.sock`; second launch sends `SHOW` to the existing instance and exits
 - **Logging**: `~/.local/state/fluxv2/fluxv2.log`

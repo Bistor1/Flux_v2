@@ -62,11 +62,15 @@ modules:
       - install -Dm644 first_run.py /app/share/fluxv2/first_run.py
       - install -Dm644 gen_icon.py /app/share/fluxv2/gen_icon.py
       - install -Dm644 requirements.txt /app/share/fluxv2/requirements.txt
+      - mkdir -p /app/share/fluxv2/fluxv2 && cp -a fluxv2/*.py /app/share/fluxv2/fluxv2/
       - install -Dm644 io.github.Bistor1.FluxV2.desktop /app/share/applications/io.github.Bistor1.FluxV2.desktop
       - install -Dm644 io.github.Bistor1.FluxV2.metainfo.xml /app/share/metainfo/io.github.Bistor1.FluxV2.metainfo.xml
       - mkdir -p /app/share/icons/hicolor/256x256/apps
       - python3 gen_icon.py /app/share/icons/hicolor/256x256/apps/io.github.Bistor1.FluxV2.png
     sources:
+      - type: dir
+        path: ../fluxv2
+        dest: fluxv2
       - type: file
         path: ../main.py
       - type: file

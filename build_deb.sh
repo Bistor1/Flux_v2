@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-VERSION="2.0.12"
+VERSION="2.0.13"
 PACKAGE_NAME="fluxv2"
 OUTPUT_FILE="${PACKAGE_NAME}_${VERSION}_amd64.deb"
 
@@ -31,10 +31,13 @@ mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$DESKTOP_DIR" "$ICON_DIR"
 cp main.py "$INSTALL_DIR/"
 cp first_run.py "$INSTALL_DIR/"
 cp requirements.txt "$INSTALL_DIR/" 2>/dev/null || true
+mkdir -p "$INSTALL_DIR/fluxv2"
+cp fluxv2/*.py "$INSTALL_DIR/fluxv2/"
 
 # Set correct permissions 
 chmod 644 "$INSTALL_DIR/main.py"
 chmod 644 "$INSTALL_DIR/first_run.py"
+chmod 644 "$INSTALL_DIR/fluxv2/"*.py
 chmod 644 "$INSTALL_DIR/requirements.txt" 2>/dev/null || true
 
 # --- Icon generieren (sun-to-moon transition, warm-to-cool, no purple) ---
