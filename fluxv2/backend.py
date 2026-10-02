@@ -135,6 +135,8 @@ def kwin_set_temperature(temp):
 
 def kwin_release():
     """Put Night Light back to how it was before Flux changed it."""
+    if os.environ.get("FLUXV2_KEEP_NIGHTLIGHT") == "1":
+        return True, ""
     kwin_stop_preview()
     path = _snapshot_path()
     if not path.is_file():

@@ -16,6 +16,7 @@ The original author of the unpublished v1 of Flux is: "CartoonRacoon"
 - **Actions**: Reset to normal, disable Redshift
 - **System Tray**: Minimizes to tray on window close; tray menu offers **Open** and **Quit** (requires `pystray`, auto-installed on first run)
 - **Single Instance**: Launching a second time brings the running window to the front instead of creating a duplicate tray icon
+- **Updates**: On startup, checks GitHub for a newer release and asks "Do you want to update?" before installing it
 - **First-Run Setup Wizard**: On first launch, Flux v2 opens a pure-tkinter window with a live checklist that creates the venv and installs all required Python packages (customtkinter, Pillow, pystray) step-by-step
 - **Logo**: Single circular temperature-gradient icon (warm red center → orange → cool blue rim)
 - **Debian Package**: Complete `.deb` with launcher, automatic setup, and icon
@@ -33,7 +34,7 @@ The original author of the unpublished v1 of Flux is: "CartoonRacoon"
 ### Via .deb package (recommended)
 
 ```bash
-sudo dpkg -i fluxv2_2.0.14_amd64.deb
+sudo dpkg -i fluxv2_2.0.15_amd64.deb
 sudo apt install -f
 ```
 
@@ -65,7 +66,7 @@ Status is shown live (Active / Reset / Disabled). The temperature display recolo
 
 ```bash
 ./build_flatpak.sh
-flatpak install --user fluxv2_2.0.14.flatpak
+flatpak install --user fluxv2_2.0.15.flatpak
 ```
 
 Or install from a local build directory:
@@ -87,7 +88,7 @@ flatpak run --filesystem="$(pwd)" --share=network org.flatpak.Builder \
 ./build_deb.sh
 ```
 
-Generates `fluxv2_2.0.14_amd64.deb`. `fpm` is used when it is installed; otherwise the script packs the archive with `ar` and `tar`.
+Generates `fluxv2_2.0.15_amd64.deb`. `fpm` is used when it is installed; otherwise the script packs the archive with `ar` and `tar`.
 
 ## Technical Details
 

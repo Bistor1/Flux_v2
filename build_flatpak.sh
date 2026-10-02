@@ -4,7 +4,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-VERSION="2.0.14"
+VERSION="2.0.15"
 APP_ID="io.github.Bistor1.FluxV2"
 MANIFEST="flatpak/io.github.Bistor1.FluxV2.yml"
 BUILD_DIR="flatpak-build"

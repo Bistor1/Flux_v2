@@ -4,8 +4,10 @@ import base64
 import io
 import os
 import queue
+import subprocess
 import sys
 import threading
+import time
 
 import customtkinter as ctk
 from tkinter import PhotoImage, messagebox
@@ -28,6 +30,8 @@ from fluxv2.theme import (
 )
 from fluxv2.tray import PYSTRAY_AVAILABLE, notify, start_tray
 from fluxv2.ui import build as build_ui
+from fluxv2.update import current_is_outdated, install_release, relaunch_command
+from fluxv2 import __version__
 
 
 class FluxApp(ctk.CTk):
@@ -53,6 +57,9 @@ class FluxApp(ctk.CTk):
         self._backend = None
         self._apply_after_id = None
         self._kwin_hold = None
+        self._update_declined = False
+        self._update_busy = False
+        self._update_prompted = False
 
         build_ui(self)
         self._set_window_icon()
@@ -60,7 +67,89 @@ class FluxApp(ctk.CTk):
         self._setup_tray()
         self._start_ipc_listener()
         self.after(100, self._check_backend)
+        self.after(1500, self._start_update_check)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _start_update_check(self):
+        if os.environ.get("FLUXV2_NO_UPDATE"):
+            return
+        threading.Thread(target=self._update_loop, daemon=True).start()
+
+    def _update_loop(self):
+        while not self._quitting:
+            if not self._update_declined and not self._update_busy:
+                try:
+                    release = current_is_outdated()
+                except Exception as exc:
+                    print(f"Warning: update check failed: {exc}", file=sys.stderr)
+                    release = None
+                if release is not None and not self._update_prompted:
+                    self._update_prompted = True
+                    self._post_ui(lambda rel=release: self._ask_update(rel))
+            for _ in range(30 * 60):
+                if self._quitting:
+                    return
+                time.sleep(1)
+
+    def _ask_update(self, release):
+        if self._quitting or self._update_declined or self._update_busy:
+            return
+        self._show_window()
+        yes = messagebox.askyesno(
+            "Update Flux v2",
+            f"Version {release.version} is available.\n"
+            f"You have {__version__}.\n\n"
+            "Do you want to update?",
+            parent=self,
+        )
+        if not yes:
+            self._update_declined = True
+            return
+        self._update_busy = True
+        self.status_label.configure(
+            text=f"Updating to {release.version}…", text_color=WARNING
+        )
+        notify("Flux v2", f"Installing {release.version}…")
+        threading.Thread(
+            target=self._install_update, args=(release,), daemon=True
+        ).start()
+
+    def _install_update(self, release):
+        try:
+            ok, err = install_release(release)
+        except Exception as exc:
+            ok, err = False, str(exc)
+        if ok:
+            self._post_ui(self._restart_after_update)
+            return
+        self._update_busy = False
+        self._post_ui(lambda e=err: self._update_failed(e))
+
+    def _update_failed(self, error):
+        self.status_label.configure(
+            text=self._short_error(error), text_color=ERROR_COLOR
+        )
+        messagebox.showerror("Update failed", error or "Update failed", parent=self)
+
+    def _restart_after_update(self):
+        """Start the installed copy and leave Night Light as it is."""
+        os.environ["FLUXV2_KEEP_NIGHTLIGHT"] = "1"
+        if self._lock_socket is not None:
+            try:
+                self._lock_socket.close()
+            except Exception:
+                pass
+            self._lock_socket = None
+        try:
+            os.unlink(lock_socket_path())
+        except OSError:
+            pass
+        command = relaunch_command()
+        if command:
+            child_env = os.environ.copy()
+            child_env.pop("FLUXV2_KEEP_NIGHTLIGHT", None)
+            subprocess.Popen(command, start_new_session=True, env=child_env)
+        self._really_quit()
 
     def _set_temp_label(self, temp):
         self.temp_display.configure(
