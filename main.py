@@ -45,6 +45,13 @@ MIN_TEMP = 1000
 MAX_TEMP = 6500
 DEFAULT_TEMP = 3400
 
+# KWin's NightLight.preview() lasts ~15s and a repeat of the same value does
+# not restart that timer, so the holder nudges by 1 K well before it expires.
+KWIN_PREVIEW_REFRESH_MS = 8000
+KWIN_SERVICE = "org.kde.KWin"
+KWIN_PATH = "/org/kde/KWin/NightLight"
+KWIN_IFACE = "org.kde.KWin.NightLight"
+
 PRESETS = [
     (6500, "Daylight"),
     (5500, "Neutral"),
@@ -127,6 +134,75 @@ def create_icon(size=256):
     return img
 
 
+def _busctl(args, timeout=3):
+    """Call busctl --user. Returns CompletedProcess, or None if it cannot run."""
+    if not shutil.which("busctl"):
+        return None
+    try:
+        return subprocess.run(
+            ["busctl", "--user", *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def kwin_nightlight_available():
+    """True when KWin exposes Night Light (KDE Wayland/X11). Redshift cannot
+    drive KWin: this compositor has no wlroots gamma protocol."""
+    result = _busctl([
+        "get-property", KWIN_SERVICE, KWIN_PATH, KWIN_IFACE, "available",
+    ])
+    if result is None or result.returncode != 0:
+        return False
+    return "true" in (result.stdout or "").lower()
+
+
+def kwin_preview(temp):
+    """Apply a one-shot color temperature via KWin Night Light."""
+    temp = int(temp)
+    result = _busctl([
+        "call", KWIN_SERVICE, KWIN_PATH, KWIN_IFACE,
+        "preview", "u", str(temp),
+    ])
+    if result is None:
+        return False, "busctl is not available"
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "KWin Night Light call failed").strip()
+        return False, err
+    return True, ""
+
+
+def kwin_stop_preview():
+    """Drop the Night Light preview and return the screen to normal."""
+    result = _busctl([
+        "call", KWIN_SERVICE, KWIN_PATH, KWIN_IFACE, "stopPreview",
+    ])
+    if result is None:
+        return False, "busctl is not available"
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "KWin stopPreview failed").strip()
+        return False, err
+    return True, ""
+
+
+def detect_color_backend():
+    """Pick a working color-temperature backend.
+
+    KWin Night Light wins on KDE, because the redshift/gammastep binaries
+    cannot set gamma there. Elsewhere we shell out to those CLIs.
+    """
+    if kwin_nightlight_available():
+        return "kwin"
+    if shutil.which("redshift"):
+        return "redshift"
+    if shutil.which("gammastep"):
+        return "gammastep"
+    return None
+
+
 def _lock_socket_path():
     """Path to the single-instance IPC lock socket in the user's state dir."""
     state = os.environ.get(
@@ -203,12 +279,16 @@ class FluxApp(ctk.CTk):
         self._tray_icon = None
         self._quitting = False
         self._lock_socket = lock_socket  # keep alive for the lifetime of the app
+        self._backend = None
+        self._kwin_after_id = None
+        self._kwin_hold = None  # temperature we must keep previewing
+        self._kwin_last_sent = None
 
         self._create_ui()
         self._set_window_icon()
         self._setup_tray()
         self._start_ipc_listener()
-        self.after(100, self._check_redshift)
+        self.after(100, self._check_backend)
 
         # Intercept window close (X) -> minimize to tray instead of quitting
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -398,7 +478,9 @@ class FluxApp(ctk.CTk):
             )
         else:
             # Don't pop up a messagebox mid-drag — just show status.
-            self.status_label.configure(text="Error", text_color=ERROR_COLOR)
+            self.status_label.configure(
+                text=self._short_error(error), text_color=ERROR_COLOR
+            )
 
     def _apply_preset(self, temp):
         self.slider.set(temp)
@@ -428,15 +510,22 @@ class FluxApp(ctk.CTk):
         except Exception as e:
             print(f"Warning: Could not set window icon: {e}", file=sys.stderr)
 
-    def _check_redshift(self):
-        """Check if redshift is available. Delayed so UI shows first."""
-        if not shutil.which("redshift"):
-            messagebox.showwarning(
-                "Redshift not found",
-                "Redshift is not installed.\n\n"
-                "Please install with:\n"
-                "sudo apt install redshift"
-            )
+    def _check_backend(self):
+        """Warn only when no color backend exists. Delayed so UI shows first.
+
+        On KDE this is KWin Night Light (no redshift binary required).
+        """
+        self._backend = detect_color_backend()
+        if self._backend is not None:
+            return
+        messagebox.showwarning(
+            "No color control",
+            "Flux v2 could not find a way to set the screen temperature.\n\n"
+            "On KDE, KWin Night Light is used automatically.\n"
+            "Otherwise install redshift or gammastep:\n"
+            "  sudo pacman -S redshift\n"
+            "  sudo apt install redshift"
+        )
 
     # ==================== SYSTEM TRAY ====================
     def _setup_tray(self):
@@ -529,6 +618,11 @@ class FluxApp(ctk.CTk):
 
     def _really_quit(self):
         """Actually quit the app (called from tray Quit)."""
+        self._quitting = True
+        self._cancel_apply()
+        # Drop the KWin preview so the screen doesn't stay tinted after exit.
+        if self._kwin_hold is not None:
+            self._kwin_release()
         try:
             # Close IPC socket + remove the file so next launch rebinds cleanly.
             if self._lock_socket is not None:
@@ -559,32 +653,132 @@ class FluxApp(ctk.CTk):
         except Exception:
             pass
 
-    # ==================== REDSHIFT ====================
-    def run_redshift(self, temp=None, reset=False, disable=False):
+    # ==================== COLOR TEMPERATURE ====================
+    def _cancel_apply(self):
+        if self._apply_after_id is not None:
+            try:
+                self.after_cancel(self._apply_after_id)
+            except Exception:
+                pass
+            self._apply_after_id = None
+
+    def _cancel_kwin_keepalive(self):
+        if self._kwin_after_id is not None:
+            try:
+                self.after_cancel(self._kwin_after_id)
+            except Exception:
+                pass
+            self._kwin_after_id = None
+
+    def _schedule_kwin_keepalive(self):
+        self._cancel_kwin_keepalive()
+        self._kwin_after_id = self.after(
+            KWIN_PREVIEW_REFRESH_MS, self._kwin_keepalive
+        )
+
+    def _kwin_keepalive(self):
+        """Re-assert the preview before KWin's ~15s timeout clears it.
+
+        preview() ignores a repeat of the same temperature, so alternate
+        with ±1 K. That difference is not visible.
+        """
+        self._kwin_after_id = None
+        if self._quitting or self._kwin_hold is None:
+            return
+        base = self._kwin_hold
+        alt = base - 1 if base > MIN_TEMP else base + 1
+        send = alt if self._kwin_last_sent == base else base
+        ok, err = kwin_preview(send)
+        if not ok:
+            self.status_label.configure(
+                text=self._short_error(err), text_color=ERROR_COLOR
+            )
+            return
+        self._kwin_last_sent = send
+        self._schedule_kwin_keepalive()
+
+    def _kwin_hold_temp(self, temp):
+        temp = int(temp)
+        # Same value does not restart KWin's preview timer.
+        if self._kwin_last_sent == temp:
+            alt = temp - 1 if temp > MIN_TEMP else temp + 1
+            ok, err = kwin_preview(alt)
+            if not ok:
+                return False, err
+        ok, err = kwin_preview(temp)
+        if not ok:
+            return False, err
+        self._kwin_hold = temp
+        self._kwin_last_sent = temp
+        self._schedule_kwin_keepalive()
+        return True, ""
+
+    def _kwin_release(self):
+        self._kwin_hold = None
+        self._kwin_last_sent = None
+        self._cancel_kwin_keepalive()
+        return kwin_stop_preview()
+
+    def _cli_backend_bin(self):
+        if self._backend == "gammastep":
+            return "gammastep"
+        return "redshift"
+
+    def _run_cli_backend(self, temp=None, reset=False, disable=False):
+        binary = self._cli_backend_bin()
         try:
             if reset or disable:
-                cmd = ["redshift", "-x"]
+                cmd = [binary, "-x"]
             else:
                 # -P: reset previous one-shot, -O: one-shot temperature
-                cmd = ["redshift", "-P", "-O", str(temp)]
+                cmd = [binary, "-P", "-O", str(temp)]
 
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=10,
             )
-
             if result.returncode == 0:
                 return True, ""
-            else:
-                return False, result.stderr.strip() or "Unknown error"
+            return False, result.stderr.strip() or "Unknown error"
         except subprocess.TimeoutExpired:
-            return False, "Redshift timed out"
+            return False, f"{binary} timed out"
         except FileNotFoundError:
-            return False, "Redshift is not installed"
+            return False, f"{binary} is not installed"
         except Exception as e:
             return False, str(e)
+
+    def run_redshift(self, temp=None, reset=False, disable=False):
+        """Apply, reset, or disable the color temperature.
+
+        Name kept for callers. On KDE this talks to KWin Night Light;
+        otherwise it shells out to redshift or gammastep.
+        """
+        if self._backend is None:
+            self._backend = detect_color_backend()
+        if self._backend is None:
+            return False, (
+                "No color backend. On KDE, KWin Night Light is required. "
+                "Elsewhere install redshift or gammastep."
+            )
+
+        if self._backend == "kwin":
+            if reset or disable:
+                return self._kwin_release()
+            return self._kwin_hold_temp(temp if temp is not None else self.current_temp)
+
+        # CLI backend owns the gamma ramp; don't also hold a KWin preview.
+        if self._kwin_hold is not None:
+            self._kwin_release()
+        return self._run_cli_backend(temp=temp, reset=reset, disable=disable)
+
+    @staticmethod
+    def _short_error(error):
+        text = " ".join((error or "Unknown error").split())
+        if len(text) > 72:
+            text = text[:69] + "..."
+        return text
 
     def _apply_redshift(self):
         """Apply current temperature to redshift and update the status label.
@@ -600,7 +794,9 @@ class FluxApp(ctk.CTk):
             )
         else:
             messagebox.showerror("Error", error)
-            self.status_label.configure(text="Error", text_color=ERROR_COLOR)
+            self.status_label.configure(
+                text=self._short_error(error), text_color=ERROR_COLOR
+            )
 
     def reset_temperature(self):
         success, error = self.run_redshift(reset=True)

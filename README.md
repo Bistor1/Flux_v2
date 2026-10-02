@@ -12,7 +12,7 @@ The original author of the unpublished v1 of Flux is: "CartoonRacoon"
 - **Modern UI**: Dark theme with warm-to-cool gradient accents (orange `#f59e0b` ↔ blue `#3b82f6`), large temperature display that recolors with the temperature
 - **Live Slider**: Moving the slider applies the temperature automatically (~350 ms after you stop dragging) — no need to click Apply
 - **Quick Presets**: From Daylight (6500K) to Deep Red (1800K) in a clean 2×4 grid
-- **Redshift Integration**: Controls `redshift` via CLI (one-shot mode)
+- **Color temperature**: On KDE, talks to KWin Night Light over D-Bus (no extra package). Elsewhere controls `redshift` or `gammastep` via CLI (one-shot mode)
 - **Actions**: Reset to normal, disable Redshift
 - **System Tray**: Minimizes to tray on window close; tray menu offers **Open** and **Quit** (requires `pystray`, auto-installed on first run)
 - **Single Instance**: Launching a second time brings the running window to the front instead of creating a duplicate tray icon
@@ -23,7 +23,7 @@ The original author of the unpublished v1 of Flux is: "CartoonRacoon"
 ## Requirements
 
 - Linux (Debian/Ubuntu recommended)
-- `redshift` installed
+- KDE Plasma (KWin Night Light), or `redshift` / `gammastep` installed
 - Python 3.11+
 - `python3-venv`, `python3-tk`, `python3-pil`, `python3-gi`, `gir1.2-gtk-3.0`
 
@@ -32,7 +32,7 @@ The original author of the unpublished v1 of Flux is: "CartoonRacoon"
 ### Via .deb package (recommended)
 
 ```bash
-sudo dpkg -i fluxv2_2.0.7_amd64.deb
+sudo dpkg -i fluxv2_2.0.9_amd64.deb
 sudo apt install -f
 ```
 
@@ -66,7 +66,7 @@ Status is shown live (Active / Reset / Disabled). The temperature display recolo
 ./build_deb.sh
 ```
 
-Generates `fluxv2_2.0.7_amd64.deb` (requires `fpm`).
+Generates `fluxv2_2.0.9_amd64.deb` (requires `fpm`).
 
 ## Technical Details
 

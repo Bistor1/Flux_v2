@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-VERSION="2.0.8"
+VERSION="2.0.9"
 PACKAGE_NAME="fluxv2"
 OUTPUT_FILE="${PACKAGE_NAME}_${VERSION}_amd64.deb"
 
@@ -105,9 +105,10 @@ show_error() {
 log "=== $APP_NAME starting ==="
 
 # --- System checks ---
-if ! command -v redshift &>/dev/null; then
-    show_error "Redshift is not installed.
-Please run: sudo apt install redshift"
+# redshift is optional: on KDE, main.py talks to KWin Night Light.
+# Warn only; do not block launch.
+if ! command -v redshift &>/dev/null && ! command -v gammastep &>/dev/null; then
+    log "redshift/gammastep not installed; expecting KWin Night Light or a later install."
 fi
 
 if ! python3 -m venv --help &>/dev/null; then
@@ -194,7 +195,6 @@ fpm -s dir -t deb \
     --depends "python3-venv" \
     --depends "python3-tk" \
     --depends "python3-pil" \
-    --depends "redshift" \
     --depends "zenity" \
     --depends "python3-gi" \
     --depends "gir1.2-gtk-3.0" \
