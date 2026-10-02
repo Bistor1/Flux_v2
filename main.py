@@ -77,6 +77,35 @@ SUCCESS = "#22c55e"
 WARNING = "#f59e0b"
 ERROR_COLOR = "#ff5555"
 
+# Straight RGB from amber to blue browns out in the middle. These stops
+# stay on the warm→white→cool path, so the label never goes purple or mud.
+_TEMP_COLOR_STOPS = (
+    (0.00, (239, 90, 20)),
+    (0.40, (255, 176, 48)),
+    (0.72, (255, 236, 210)),
+    (1.00, (147, 197, 253)),
+)
+
+
+def temp_accent_hex(temp):
+    """Saturated label color for a temperature in MIN_TEMP..MAX_TEMP."""
+    span = MAX_TEMP - MIN_TEMP
+    ratio = (temp - MIN_TEMP) / span if span else 0.0
+    if ratio <= _TEMP_COLOR_STOPS[0][0]:
+        r, g, b = _TEMP_COLOR_STOPS[0][1]
+    elif ratio >= _TEMP_COLOR_STOPS[-1][0]:
+        r, g, b = _TEMP_COLOR_STOPS[-1][1]
+    else:
+        r, g, b = _TEMP_COLOR_STOPS[-1][1]
+        for (left, c0), (right, c1) in zip(_TEMP_COLOR_STOPS, _TEMP_COLOR_STOPS[1:]):
+            if ratio <= right:
+                u = (ratio - left) / (right - left)
+                r = int(c0[0] + (c1[0] - c0[0]) * u)
+                g = int(c0[1] + (c1[1] - c0[1]) * u)
+                b = int(c0[2] + (c1[2] - c0[2]) * u)
+                break
+    return "#%02x%02x%02x" % (r, g, b)
+
 
 def create_icon(size=256):
     """Create a temperature-gradient icon: warm red center -> cool blue rim.
@@ -329,7 +358,7 @@ class FluxApp(ctk.CTk):
             display,
             text=f"{self.current_temp}K",
             font=ctk.CTkFont(size=68, weight="bold"),
-            text_color=ACCENT
+            text_color=temp_accent_hex(self.current_temp)
         )
         self.temp_display.pack(pady=(22, 2))
 
@@ -446,22 +475,10 @@ class FluxApp(ctk.CTk):
 
     def _on_slider_change(self, value):
         temp = int(float(value))
-        self.temp_display.configure(text=f"{temp}K")
-        # Color shifts from warm (low) to cool (high)
+        self.temp_display.configure(
+            text=f"{temp}K", text_color=temp_accent_hex(temp)
+        )
         self.current_temp = temp
-        if PIL_AVAILABLE:
-            ratio = (temp - MIN_TEMP) / (MAX_TEMP - MIN_TEMP)
-            # Interpolate accent color between warm (~1800K) and cool (~6500K)
-            warm = (245, 158, 11)
-            cool = (59, 130, 246)
-            col = (
-                int(warm[0] * (1 - ratio) + cool[0] * ratio),
-                int(warm[1] * (1 - ratio) + cool[1] * ratio),
-                int(warm[2] * (1 - ratio) + cool[2] * ratio),
-            )
-            hex_col = "#%02x%02x%02x" % col
-            self.temp_display.configure(text_color=hex_col)
-
         self._schedule_live_apply()
 
     def _schedule_live_apply(self):
@@ -489,7 +506,9 @@ class FluxApp(ctk.CTk):
 
     def _apply_preset(self, temp):
         self.slider.set(temp)
-        self.temp_display.configure(text=f"{temp}K")
+        self.temp_display.configure(
+            text=f"{temp}K", text_color=temp_accent_hex(temp)
+        )
         self.current_temp = temp
         self._apply_redshift()
 
@@ -834,7 +853,10 @@ class FluxApp(ctk.CTk):
                 text_color=TEXT_SECONDARY
             )
             self.slider.set(DEFAULT_TEMP)
-            self.temp_display.configure(text=f"{DEFAULT_TEMP}K")
+            self.temp_display.configure(
+                text=f"{DEFAULT_TEMP}K",
+                text_color=temp_accent_hex(DEFAULT_TEMP),
+            )
             self.current_temp = DEFAULT_TEMP
         else:
             messagebox.showerror("Error", error)
