@@ -5,3 +5,5 @@ __pycache__/
 .flatpak-builder/
 flatpak-build/
 flatpak-repo/
+.venv/
+*.log
