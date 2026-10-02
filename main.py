@@ -5,6 +5,7 @@ Fixed & stabilized
 """
 
 import os
+import queue
 import sys
 import socket
 import shutil
@@ -279,6 +280,9 @@ class FluxApp(ctk.CTk):
         self._tray_icon = None
         self._quitting = False
         self._lock_socket = lock_socket  # keep alive for the lifetime of the app
+        # Tk/Tcl is main-thread only. Workers push callables here; the poller
+        # below runs them. Never call self.after() from another thread.
+        self._ui_queue = queue.Queue()
         self._backend = None
         self._kwin_after_id = None
         self._kwin_hold = None  # temperature we must keep previewing
@@ -286,6 +290,7 @@ class FluxApp(ctk.CTk):
 
         self._create_ui()
         self._set_window_icon()
+        self.after(100, self._poll_ui_queue)
         self._setup_tray()
         self._start_ipc_listener()
         self.after(100, self._check_backend)
@@ -543,9 +548,9 @@ class FluxApp(ctk.CTk):
             if icon_img is None:
                 icon_img = Image.new('RGBA', (64, 64), (245, 158, 11, 255))
 
-            # Snapshot at menu creation time, so weakref-safe calls do not deref self
+            # pystray invokes these on its own thread. Do not touch Tk here.
             def _show_window_stub(icon=None):
-                self.after(0, self._show_window)
+                self._post_ui(self._show_window)
 
             def _quit(icon=None):
                 self._quitting = True
@@ -554,7 +559,7 @@ class FluxApp(ctk.CTk):
                         icon.stop()
                 except Exception:
                     pass
-                self.after(0, self._really_quit)
+                self._post_ui(self._really_quit)
 
             menu = pystray.Menu(
                 pystray.MenuItem("Open", _show_window_stub, default=True),
@@ -577,10 +582,34 @@ class FluxApp(ctk.CTk):
             print(f"Warning: Could not set up system tray: {e}", file=sys.stderr)
             self._tray_icon = None
 
-    def _show_window(self):
-        """Restore the window from minimized state."""
+    def _post_ui(self, callback):
+        """Queue a callable for the Tk main thread. Safe from any thread."""
+        self._ui_queue.put(callback)
+
+    def _poll_ui_queue(self):
+        """Drain callbacks queued by the IPC and tray threads."""
         try:
-            self.after(0, lambda: (self.deiconify(), self.lift(), self.focus_force()))
+            while True:
+                callback = self._ui_queue.get_nowait()
+                try:
+                    callback()
+                except Exception as e:
+                    print(f"Warning: UI callback failed: {e}", file=sys.stderr)
+        except queue.Empty:
+            pass
+        try:
+            # destroy() inside a callback makes a further after() illegal.
+            if self.winfo_exists():
+                self.after(100, self._poll_ui_queue)
+        except Exception:
+            pass
+
+    def _show_window(self):
+        """Restore the window from minimized state. Main thread only."""
+        try:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
         except Exception:
             pass
 
@@ -599,8 +628,7 @@ class FluxApp(ctk.CTk):
                 try:
                     data = conn.recv(16)
                     if data == b"SHOW":
-                        self.after(0, lambda: (self.deiconify(), self.lift(),
-                                               self.focus_force()))
+                        self._post_ui(self._show_window)
                 except Exception:
                     pass
                 finally:
