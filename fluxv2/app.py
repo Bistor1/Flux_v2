@@ -11,11 +11,9 @@ import customtkinter as ctk
 from tkinter import PhotoImage, messagebox
 
 from fluxv2.backend import (
-    KWIN_PREVIEW_REFRESH_MS,
     detect_color_backend,
-    keepalive_temp,
-    kwin_preview,
-    kwin_stop_preview,
+    kwin_release,
+    kwin_set_temperature,
     run_cli,
 )
 from fluxv2.icon import PIL_AVAILABLE, Image, create_icon
@@ -23,7 +21,6 @@ from fluxv2.instance import lock_socket_path, serve_show
 from fluxv2.theme import (
     DEFAULT_TEMP,
     ERROR_COLOR,
-    MIN_TEMP,
     SUCCESS,
     TEXT_SECONDARY,
     WARNING,
@@ -55,9 +52,7 @@ class FluxApp(ctk.CTk):
         self._ui_queue = queue.Queue()
         self._backend = None
         self._apply_after_id = None
-        self._kwin_after_id = None
         self._kwin_hold = None
-        self._kwin_last_sent = None
 
         build_ui(self)
         self._set_window_icon()
@@ -229,52 +224,15 @@ class FluxApp(ctk.CTk):
             pass
         self._apply_after_id = None
 
-    def _cancel_kwin_keepalive(self):
-        if self._kwin_after_id is None:
-            return
-        try:
-            self.after_cancel(self._kwin_after_id)
-        except Exception:
-            pass
-        self._kwin_after_id = None
-
-    def _schedule_kwin_keepalive(self):
-        self._cancel_kwin_keepalive()
-        self._kwin_after_id = self.after(KWIN_PREVIEW_REFRESH_MS, self._kwin_keepalive)
-
-    def _kwin_keepalive(self):
-        self._kwin_after_id = None
-        if self._quitting or self._kwin_hold is None:
-            return
-        send = keepalive_temp(self._kwin_hold, self._kwin_last_sent, MIN_TEMP)
-        ok, err = kwin_preview(send)
-        if not ok:
-            self.status_label.configure(
-                text=self._short_error(err), text_color=ERROR_COLOR
-            )
-            return
-        self._kwin_last_sent = send
-        self._schedule_kwin_keepalive()
-
     def _kwin_hold_temp(self, temp):
-        temp = int(temp)
-        if self._kwin_last_sent == temp:
-            ok, err = kwin_preview(keepalive_temp(temp, temp, MIN_TEMP))
-            if not ok:
-                return False, err
-        ok, err = kwin_preview(temp)
-        if not ok:
-            return False, err
-        self._kwin_hold = temp
-        self._kwin_last_sent = temp
-        self._schedule_kwin_keepalive()
-        return True, ""
+        ok, err = kwin_set_temperature(temp)
+        if ok:
+            self._kwin_hold = int(temp)
+        return ok, err
 
     def _kwin_release(self):
         self._kwin_hold = None
-        self._kwin_last_sent = None
-        self._cancel_kwin_keepalive()
-        return kwin_stop_preview()
+        return kwin_release()
 
     def _cli_backend_bin(self):
         if self._backend == "gammastep":

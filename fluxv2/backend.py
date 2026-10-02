@@ -1,14 +1,17 @@
 """Color-temperature backends: KWin Night Light, redshift, or gammastep."""
 
+import atexit
+import json
+import os
 import shutil
 import subprocess
+from pathlib import Path
 
-# preview() lasts ~15s. A repeat of the same value does not restart that
-# timer, so the holder nudges by 1 K well before it expires.
-KWIN_PREVIEW_REFRESH_MS = 8000
 KWIN_SERVICE = "org.kde.KWin"
 KWIN_PATH = "/org/kde/KWin/NightLight"
 KWIN_IFACE = "org.kde.KWin.NightLight"
+# Keys Flux writes. Anything else in the group is left alone.
+_MANAGED_KEYS = ("Active", "Mode", "NightTemperature")
 
 
 def _busctl(args, timeout=3):
@@ -36,22 +39,8 @@ def kwin_nightlight_available():
     return "true" in (result.stdout or "").lower()
 
 
-def kwin_preview(temp):
-    """Apply a one-shot color temperature via KWin Night Light."""
-    result = _busctl([
-        "call", KWIN_SERVICE, KWIN_PATH, KWIN_IFACE,
-        "preview", "u", str(int(temp)),
-    ])
-    if result is None:
-        return False, "busctl is not available"
-    if result.returncode != 0:
-        err = (result.stderr or result.stdout or "KWin Night Light call failed").strip()
-        return False, err
-    return True, ""
-
-
 def kwin_stop_preview():
-    """Drop the Night Light preview and return the screen to normal."""
+    """Drop a running preview. preview() is what shows the OSD banner."""
     result = _busctl([
         "call", KWIN_SERVICE, KWIN_PATH, KWIN_IFACE, "stopPreview",
     ])
@@ -63,10 +52,119 @@ def kwin_stop_preview():
     return True, ""
 
 
-def keepalive_temp(hold, last_sent, min_temp):
-    """Temperature to send so a repeated KWin preview restarts its timer."""
-    alt = hold - 1 if hold > min_temp else hold + 1
-    return alt if last_sent == hold else hold
+def _kwinrc():
+    return Path.home() / ".config" / "kwinrc"
+
+
+def _snapshot_path():
+    state = os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
+    directory = Path(state) / "fluxv2"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / "kwin-nightcolor.json"
+
+
+def _read_nightcolor():
+    path = _kwinrc()
+    if not path.is_file():
+        return {}
+    section = {}
+    in_group = False
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            if in_group:
+                break
+            in_group = stripped == "[NightColor]"
+            continue
+        if in_group and "=" in line and not stripped.startswith(("#", ";")):
+            key, value = line.split("=", 1)
+            section[key.strip()] = value.strip()
+    return section
+
+
+def _kwrite(key, value=None, delete=False, notify=False):
+    if not shutil.which("kwriteconfig6"):
+        return False, "kwriteconfig6 is not available"
+    cmd = ["kwriteconfig6", "--file", "kwinrc", "--group", "NightColor", "--key", key]
+    if notify:
+        cmd.append("--notify")
+    if delete:
+        cmd.append("--delete")
+    else:
+        if key == "Active":
+            cmd.extend(["--type", "bool"])
+        cmd.append(str(value))
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return False, str(exc)
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "kwriteconfig6 failed").strip()
+        return False, err
+    return True, ""
+
+
+def _remember_original():
+    path = _snapshot_path()
+    if path.is_file():
+        return True, ""
+    path.write_text(json.dumps(_read_nightcolor()), encoding="utf-8")
+    return True, ""
+
+
+def kwin_set_temperature(temp):
+    """Apply a constant Night Light temperature without the preview OSD.
+
+    preview() is what makes Plasma show "Farbtemperaturvorschau". Writing
+    the NightColor config and notifying KWin does not.
+    """
+    ok, err = _remember_original()
+    if not ok:
+        return ok, err
+    writes = (
+        ("Active", "true"),
+        ("Mode", "Constant"),
+        ("NightTemperature", str(int(temp))),
+    )
+    for index, (key, value) in enumerate(writes):
+        ok, err = _kwrite(key, value, notify=(index == len(writes) - 1))
+        if not ok:
+            return ok, err
+    return True, ""
+
+
+def kwin_release():
+    """Put Night Light back to how it was before Flux changed it."""
+    kwin_stop_preview()
+    path = _snapshot_path()
+    if not path.is_file():
+        return True, ""
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        saved = {}
+    if not isinstance(saved, dict):
+        saved = {}
+    ops = []
+    for key in _MANAGED_KEYS:
+        if key in saved:
+            ops.append((key, saved[key], False))
+        else:
+            ops.append((key, None, True))
+    if not ops:
+        path.unlink(missing_ok=True)
+        return True, ""
+    for index, (key, value, delete) in enumerate(ops):
+        ok, err = _kwrite(key, value, delete=delete, notify=(index == len(ops) - 1))
+        if not ok:
+            return ok, err
+    path.unlink(missing_ok=True)
+    return True, ""
+
+
+def install_kwin_restore_hook():
+    """Restore Night Light on Ctrl+C and normal interpreter shutdown."""
+    atexit.register(kwin_release)
 
 
 def detect_color_backend():
