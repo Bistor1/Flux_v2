@@ -12,7 +12,6 @@ from fluxv2.theme import (
     MIN_TEMP,
     PRESETS,
     TEXT_SECONDARY,
-    temp_accent_hex,
 )
 
 
@@ -27,9 +26,10 @@ def build(app):
     _actions(app, main)
     ctk.CTkLabel(
         main,
-        text="Closing the window minimizes to the system tray.",
+        text="Neutral sets 6500K. Turn Off restores the screen from before Flux. Close hides to the tray.",
         font=ctk.CTkFont(size=11),
         text_color=TEXT_SECONDARY,
+        wraplength=500,
     ).pack(pady=(0, 14), padx=30)
 
 
@@ -53,15 +53,16 @@ def _display(app, parent):
     display.pack(pady=12, padx=30, fill="x")
     app.temp_display = ctk.CTkLabel(
         display,
-        text=f"{app.current_temp}K",
+        text="Off",
         font=ctk.CTkFont(size=68, weight="bold"),
-        text_color=temp_accent_hex(app.current_temp),
+        text_color=TEXT_SECONDARY,
     )
     app.temp_display.pack(pady=(22, 2))
     app.status_label = ctk.CTkLabel(
-        display, text="Ready",
+        display, text="Off — screen not changed by Flux",
         font=ctk.CTkFont(size=13),
         text_color=TEXT_SECONDARY,
+        wraplength=460,
     )
     app.status_label.pack(pady=(0, 18))
 
@@ -129,7 +130,7 @@ def _actions(app, parent):
     frame = ctk.CTkFrame(parent, fg_color="transparent")
     frame.pack(pady=12, padx=30, fill="x")
     ctk.CTkButton(
-        frame, text="Reset to Normal",
+        frame, text="Neutral (6500K)",
         font=ctk.CTkFont(size=14, weight="bold"),
         height=44, corner_radius=12,
         fg_color="#2a2a2a", hover_color="#3a3a3a",
@@ -140,5 +141,5 @@ def _actions(app, parent):
         font=ctk.CTkFont(size=14, weight="bold"),
         height=44, corner_radius=12,
         fg_color="#3a1f1f", hover_color="#5c2d2d",
-        command=app.disable_redshift,
+        command=app.turn_off,
     ).pack(side="right", expand=True, padx=(8, 0), fill="x")

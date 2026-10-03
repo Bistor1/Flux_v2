@@ -107,9 +107,27 @@ def _host(args, timeout=180):
     return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
 
 
+class _SafeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _safe_url(newurl):
+            raise urllib.error.URLError(f"refusing redirect to {newurl}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _opener():
+    return urllib.request.build_opener(_SafeRedirect)
+
+
+def _private_dir():
+    parent = os.environ.get("XDG_RUNTIME_DIR") or None
+    directory = tempfile.mkdtemp(prefix="fluxv2-", dir=parent)
+    os.chmod(directory, 0o700)
+    return directory
+
+
 def _download(url, dest):
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=120) as response, open(dest, "wb") as handle:
+    with _opener().open(request, timeout=120) as response, open(dest, "wb") as handle:
         shutil.copyfileobj(response, handle)
     os.chmod(dest, 0o644)
 
@@ -127,10 +145,12 @@ def install_release(release):
 def _install_deb(release):
     if not release.deb_url:
         return False, "The release has no .deb package."
-    path = os.path.join(tempfile.gettempdir(), f"fluxv2_{release.version}_amd64.deb")
+    directory = _private_dir()
+    path = os.path.join(directory, f"fluxv2_{release.version}_amd64.deb")
     try:
         _download(release.deb_url, path)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        shutil.rmtree(directory, ignore_errors=True)
         return False, f"Download failed: {exc}"
     installer = "pkexec" if shutil.which("pkexec") else "sudo"
     if not shutil.which(installer) or not shutil.which("dpkg"):
@@ -144,6 +164,8 @@ def _install_deb(release):
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         return False, str(exc)
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
     if result.returncode != 0:
         err = (result.stderr or result.stdout or "dpkg failed").strip()
         return False, err
@@ -153,21 +175,41 @@ def _install_deb(release):
 def _install_flatpak(release):
     if not release.flatpak_url:
         return False, "The release has no Flatpak bundle."
-    dest = f"/tmp/fluxv2_{release.version}.flatpak"
+    if not _safe_url(release.flatpak_url):
+        return False, "The download URL is not on an allowed host."
+    parent = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
     try:
-        result = _host(["curl", "-fsSL", "-o", dest, release.flatpak_url], timeout=180)
+        made = _host(["mktemp", "-d", "-p", parent, "fluxv2.XXXXXXXX"], timeout=30)
     except (subprocess.TimeoutExpired, OSError) as exc:
         return False, str(exc)
-    if result.returncode != 0:
-        err = (result.stderr or result.stdout or "Download failed").strip()
-        return False, err
+    if made.returncode != 0:
+        return False, (made.stderr or made.stdout or "Could not create a download directory").strip()
+    directory = made.stdout.strip()
+    dest = os.path.join(directory, f"fluxv2_{release.version}.flatpak")
     try:
+        result = _host(
+            [
+                "curl", "-fsSL", "--proto", "=https",
+                "-o", dest,
+                "-w", "%{url_effective}",
+                release.flatpak_url,
+            ],
+            timeout=180,
+        )
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "Download failed").strip()
+            return False, err
+        final_url = (result.stdout or "").strip()
+        if not _safe_url(final_url):
+            return False, "The download was redirected to a host Flux will not use."
         result = _host(
             ["flatpak", "install", "--user", "--noninteractive", "--or-update", dest],
             timeout=180,
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         return False, str(exc)
+    finally:
+        _host(["rm", "-rf", directory], timeout=30)
     if result.returncode != 0:
         err = (result.stderr or result.stdout or "flatpak install failed").strip()
         return False, err

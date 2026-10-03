@@ -18,6 +18,8 @@ Env vars (set by the launcher):
 """
 
 import os
+import queue
+import shutil
 import sys
 import subprocess
 import threading
@@ -44,12 +46,14 @@ ERROR_COLOR = "#ff5555"
 
 # Each step: (label, kind, description)
 # kind is interpreted by _step_cmd()
+def _requirements_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
+
+
 SETUP_STEPS = [
     ("Create virtual environment", "venv", "Setting up a clean Python environment for Flux v2"),
     ("Upgrade pip", "pip_upgrade", "Updating the Python package installer"),
-    ("Install customtkinter", "pip_install customtkinter", "Modern GUI framework used by Flux v2"),
-    ("Install Pillow", "pip_install pillow", "Image processing (logo & tray icon)"),
-    ("Install pystray", "pip_install pystray", "System tray support"),
+    ("Install packages", "pip_requirements", "customtkinter, Pillow, and pystray from requirements.txt"),
     ("Verify imports", "verify", "Ensuring all packages import correctly"),
 ]
 
@@ -60,9 +64,11 @@ def _step_cmd(kind, venv_dir):
         return ["python3", "-m", "venv", "--system-site-packages", venv_dir]
     if kind == "pip_upgrade":
         return [py, "-m", "pip", "install", "--upgrade", "pip"]
-    if kind.startswith("pip_install "):
-        pkg = kind.split(" ", 1)[1]
-        return [py, "-m", "pip", "install", pkg]
+    if kind == "pip_requirements":
+        req = _requirements_path()
+        if os.path.isfile(req):
+            return [py, "-m", "pip", "install", "-r", req]
+        return [py, "-m", "pip", "install", "customtkinter", "pillow", "pystray"]
     if kind == "verify":
         return [py, "-c",
                 "import customtkinter, PIL, tkinter, pystray"]
@@ -82,10 +88,12 @@ class SetupApp(tk.Tk):
         self._success = False
         self._error_msg = ""
         self._step_widgets = []  # (icon_label, name_label, desc_label, row_frame)
+        self._ui_queue = queue.Queue()
 
         self._build_ui()
 
         # Start the worker thread shortly after the window appears
+        self.after(100, self._poll_ui_queue)
         self.after(300, self._run_steps_async)
 
     # ---------------- UI ----------------
@@ -144,17 +152,19 @@ class SetupApp(tk.Tk):
             )
             icon_lbl.pack(side="left", padx=(0, 8))
 
+            text = tk.Frame(row, bg=CARD_BG)
+            text.pack(side="left", fill="x", expand=True)
             name_lbl = tk.Label(
-                row, text=label, font=label_font,
+                text, text=label, font=label_font,
                 fg=TEXT_PRIMARY, bg=CARD_BG, anchor="w"
             )
-            name_lbl.pack(side="left", anchor="w")
+            name_lbl.pack(anchor="w")
 
             sub_lbl = tk.Label(
-                row, text=desc, font=desc_font,
+                text, text=desc, font=desc_font,
                 fg=TEXT_SECONDARY, bg=CARD_BG, anchor="w"
             )
-            sub_lbl.pack(side="bottom", anchor="w", pady=(2, 0))
+            sub_lbl.pack(anchor="w", pady=(2, 0))
 
             self._step_widgets.append((icon_lbl, name_lbl, sub_lbl, row))
 
@@ -209,20 +219,38 @@ class SetupApp(tk.Tk):
         t = threading.Thread(target=self._run_steps, daemon=True)
         t.start()
 
+    def _post(self, callback):
+        self._ui_queue.put(callback)
+
+    def _poll_ui_queue(self):
+        try:
+            while True:
+                callback = self._ui_queue.get_nowait()
+                try:
+                    callback()
+                except Exception:
+                    pass
+        except queue.Empty:
+            pass
+        try:
+            if self.winfo_exists():
+                self.after(50, self._poll_ui_queue)
+        except Exception:
+            pass
+
     def _run_steps(self):
         venv = self.venv_dir
-        # Wipe a stale venv first (best effort)
         try:
             if os.path.isdir(venv):
-                subprocess.run(["rm", "-rf", venv], check=False)
-        except Exception:
+                shutil.rmtree(venv)
+        except OSError:
             pass
 
         log_path = os.environ.get("FLUXV2_LOG_FILE")
 
         for idx, (label, kind, _desc) in enumerate(SETUP_STEPS):
-            self.after(0, lambda l=label: self._set_status(l + "\u2026"))
-            self.after(0, lambda i=idx: self._set_step(i, "running"))
+            self._post(lambda l=label: self._set_status(l + "\u2026"))
+            self._post(lambda i=idx: self._set_step(i, "running"))
             try:
                 cmd = _step_cmd(kind, venv)
                 result = subprocess.run(
@@ -234,37 +262,35 @@ class SetupApp(tk.Tk):
                             f.write(f"\n--- {label} ---\n")
                             f.write("STDOUT:\n" + (result.stdout or "") + "\n")
                             f.write("STDERR:\n" + (result.stderr or "") + "\n")
-                    except Exception:
+                    except OSError:
                         pass
                 if result.returncode != 0:
                     err = result.stderr.strip() or result.stdout.strip() or "Unknown error"
-                    self.after(0, lambda i=idx, l=label, e=err: self._fail(l, e))
+                    self._post(lambda i=idx, l=label, e=err: self._fail(i, l, e))
                     return
-                self.after(0, lambda i=idx: self._set_step(i, "ok"))
+                self._post(lambda i=idx: self._set_step(i, "ok"))
             except subprocess.TimeoutExpired:
-                self.after(0, lambda i=idx, l=label: self._fail(l, "Timed out"))
+                self._post(lambda i=idx, l=label: self._fail(i, l, "Timed out"))
                 return
             except Exception as e:
-                self.after(0, lambda i=idx, l=label, e=e: self._fail(l, str(e)))
+                self._post(lambda i=idx, l=label, e=e: self._fail(i, l, str(e)))
                 return
 
-        self.after(0, self._succeed)
+        self._post(self._succeed)
 
     # ---------------- Termination handlers ----------------
-    def _fail(self, label, msg):
+    def _fail(self, idx, label, msg):
         self._success = False
         self._error_msg = f"{label}: {msg}"
-        self.after(0, lambda: self._set_status(f"Failed: {label}", ERROR_COLOR))
-        self.after(0, lambda: self._enable_close_btn(
-            "Close", bg=ERROR_COLOR, fg="#000000"))
+        self._set_step(idx, "fail")
+        self._set_status(f"Failed: {label}", ERROR_COLOR)
+        self._enable_close_btn("Close", bg=ERROR_COLOR, fg="#000000")
         self._done = True
 
     def _succeed(self):
         self._success = True
-        self.after(0, lambda: self._set_status(
-            "Setup complete \u2014 launching Flux v2\u2026", SUCCESS))
-        self.after(0, lambda: self._enable_close_btn(
-            "Launch Flux v2", bg=ACCENT, fg="#000000"))
+        self._set_status("Setup complete \u2014 launching Flux v2\u2026", SUCCESS)
+        self._enable_close_btn("Launch Flux v2", bg=ACCENT, fg="#000000")
         # Auto-close after a short delay so the launcher continues
         self.after(800, self.destroy)
         self._done = True

@@ -2,7 +2,9 @@
 
 MIN_TEMP = 1000
 MAX_TEMP = 6500
-DEFAULT_TEMP = 3400
+# 6500K is the identity ramp. The slider starts here because nothing has
+# been applied yet; Evening (3400K) is a preset, not a hidden default.
+DEFAULT_TEMP = 6500
 
 PRESETS = [
     (6500, "Daylight"),

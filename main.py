@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Flux v2 entry point. The window lives in fluxv2.app."""
 
-import os
 import sys
 
 
@@ -24,7 +23,7 @@ def main():
     _require_gui()
     from fluxv2.app import FluxApp
     from fluxv2.backend import install_restore_hook
-    from fluxv2.instance import lock_socket_path, single_instance_or_signal
+    from fluxv2.instance import single_instance_or_signal
 
     install_restore_hook()
 
@@ -32,15 +31,11 @@ def main():
     if lock is None:
         sys.exit(0)
     try:
-        FluxApp(lock_socket=lock).mainloop()
+        FluxApp(lock=lock).mainloop()
     finally:
         try:
             lock.close()
         except Exception:
-            pass
-        try:
-            os.unlink(lock_socket_path())
-        except OSError:
             pass
 
 

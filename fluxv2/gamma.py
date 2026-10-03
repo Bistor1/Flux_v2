@@ -1,6 +1,8 @@
 """Color temperature as per-channel gamma ramps. No redshift, no Night Light."""
 
+import array
 import os
+import sys
 from ctypes import (
     CDLL,
     POINTER,
@@ -156,6 +158,22 @@ def identity_ramps(size):
 def temperature_ramps(temp, size):
     red, green, blue = channel_factors(temp)
     return fill_ramp(red, size), fill_ramp(green, size), fill_ramp(blue, size)
+
+
+def ramp_bytes(temp, size):
+    """Little-endian uint16 ramps: red, then green, then blue.
+
+    This is the layout zwlr_gamma_control_v1.set_gamma expects. 6500K is
+    the identity ramp, not a request to restore someone else's gamma.
+    """
+    red, green, blue = temperature_ramps(temp, size)
+    data = array.array("H")
+    data.extend(red)
+    data.extend(green)
+    data.extend(blue)
+    if sys.byteorder != "little":
+        data.byteswap()
+    return data.tobytes()
 
 
 def _lcms():

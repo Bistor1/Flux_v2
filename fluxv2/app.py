@@ -12,9 +12,16 @@ import time
 import customtkinter as ctk
 from tkinter import PhotoImage, messagebox
 
-from fluxv2.backend import apply_temperature, color_control_available
+from fluxv2.backend import (
+    consume_note,
+    describe_control,
+    display_lock,
+    restore_display,
+    saved_temperature,
+    set_temperature,
+)
 from fluxv2.icon import PIL_AVAILABLE, Image, create_icon
-from fluxv2.instance import lock_socket_path, serve_show
+from fluxv2.instance import serve_show
 from fluxv2.theme import (
     DEFAULT_TEMP,
     ERROR_COLOR,
@@ -32,7 +39,7 @@ from fluxv2 import __version__
 class FluxApp(ctk.CTk):
     _APPLY_DEBOUNCE_MS = 350
 
-    def __init__(self, lock_socket=None):
+    def __init__(self, lock=None):
         ctk.set_appearance_mode("dark")
         # className sets WM_CLASS so Alt+Tab shows "FluxV2" instead of "tk".
         super().__init__(className="FluxV2")
@@ -42,15 +49,16 @@ class FluxApp(ctk.CTk):
         self.resizable(False, False)
 
         self.current_temp = DEFAULT_TEMP
+        self._applied_temp = None
         self._icon_photo = None  # PhotoImage must stay referenced or Tk segfaults
         self._app_icon_img = None
         self._tray_icon = None
         self._quitting = False
-        self._lock_socket = lock_socket
+        self._lock = lock
         # Workers must not call self.after(). They push callables here.
         self._ui_queue = queue.Queue()
         self._apply_after_id = None
-        self._color_active = False
+        self._apply_gen = 0
         self._update_declined = False
         self._update_busy = False
         self._update_prompted = False
@@ -61,6 +69,7 @@ class FluxApp(ctk.CTk):
         self._setup_tray()
         self._start_ipc_listener()
         self.after(100, self._check_backend)
+        self.after(200, self._resume_saved)
         self.after(1500, self._start_update_check)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -126,22 +135,14 @@ class FluxApp(ctk.CTk):
         messagebox.showerror("Update failed", error or "Update failed", parent=self)
 
     def _restart_after_update(self):
-        """Start the installed copy and leave Night Light as it is."""
-        os.environ["FLUXV2_KEEP_NIGHTLIGHT"] = "1"
-        if self._lock_socket is not None:
-            try:
-                self._lock_socket.close()
-            except Exception:
-                pass
-            self._lock_socket = None
-        try:
-            os.unlink(lock_socket_path())
-        except OSError:
-            pass
+        """Start the installed copy and leave the current tint for it to reapply."""
+        os.environ["FLUXV2_KEEP_TINT"] = "1"
+        self._release_lock()
         command = relaunch_command()
         if command:
             child_env = os.environ.copy()
-            child_env.pop("FLUXV2_KEEP_NIGHTLIGHT", None)
+            child_env.pop("FLUXV2_KEEP_TINT", None)
+            child_env["FLUXV2_RESUME"] = "1"
             subprocess.Popen(command, start_new_session=True, env=child_env)
         self._really_quit()
 
@@ -151,9 +152,18 @@ class FluxApp(ctk.CTk):
         )
 
     def _on_slider_change(self, value):
-        temp = int(float(value))
+        temp = int(round(float(value)))
         self._set_temp_label(temp)
         self.current_temp = temp
+        if self._applied_temp is None:
+            self.status_label.configure(
+                text=f"{temp}K selected", text_color=TEXT_SECONDARY
+            )
+        elif self._applied_temp != temp:
+            self.status_label.configure(
+                text=f"Screen is still {self._applied_temp}K",
+                text_color=TEXT_SECONDARY,
+            )
         self._schedule_live_apply()
 
     def _schedule_live_apply(self):
@@ -164,22 +174,14 @@ class FluxApp(ctk.CTk):
 
     def _live_apply(self):
         self._apply_after_id = None
-        success, error = self.run_redshift(temp=self.current_temp)
-        if success:
-            self.status_label.configure(
-                text=f"Active: {self.current_temp}K", text_color=SUCCESS
-            )
-        else:
-            self.status_label.configure(
-                text=self._short_error(error), text_color=ERROR_COLOR
-            )
+        self._submit(self.current_temp, quiet=True)
 
     def _apply_preset(self, temp):
         # CTkSlider.set() does not fire the command, so this is the only apply.
         self.slider.set(temp)
         self._set_temp_label(temp)
         self.current_temp = temp
-        self._apply_redshift()
+        self._submit(temp, quiet=False)
 
     def _set_window_icon(self):
         if not PIL_AVAILABLE:
@@ -197,13 +199,34 @@ class FluxApp(ctk.CTk):
             print(f"Warning: Could not set window icon: {exc}", file=sys.stderr)
 
     def _check_backend(self):
-        if color_control_available():
+        threading.Thread(target=self._probe_backend, daemon=True).start()
+
+    def _probe_backend(self):
+        available, message = describe_control()
+        if available or self._quitting:
+            return
+        self._post_ui(lambda: self._warn_backend(message))
+
+    def _warn_backend(self, message):
+        if self._quitting:
             return
         messagebox.showwarning(
             "No color control",
-            "Flux v2 could not find a display to tint.\n\n"
-            "A Wayland session or an X11 session with XRandR is required.",
+            message or "Flux v2 could not find a display it can tint.",
+            parent=self,
         )
+
+    def _resume_saved(self):
+        """Reapply after an update restart. A normal launch stays off."""
+        if os.environ.get("FLUXV2_RESUME") != "1":
+            return
+        temp = saved_temperature()
+        if temp is None:
+            return
+        self.slider.set(temp)
+        self.current_temp = temp
+        self._set_temp_label(temp)
+        self._submit(temp, quiet=True)
 
     def _setup_tray(self):
         if not PYSTRAY_AVAILABLE:
@@ -260,33 +283,35 @@ class FluxApp(ctk.CTk):
             pass
 
     def _start_ipc_listener(self):
-        if self._lock_socket is None:
+        if self._lock is None:
             return
         threading.Thread(
             target=serve_show,
-            args=(self._lock_socket, lambda: self._post_ui(self._show_window)),
+            args=(self._lock.server, lambda: self._post_ui(self._show_window)),
             daemon=True,
         ).start()
 
     def _on_close(self):
         self.withdraw()
 
+    def _release_lock(self):
+        if self._lock is None:
+            return
+        try:
+            self._lock.close()
+        except Exception:
+            pass
+        self._lock = None
+
     def _really_quit(self):
         self._quitting = True
+        self._apply_gen += 1
         self._cancel_apply()
-        if self._color_active:
-            apply_temperature(reset=True)
-            self._color_active = False
+        if os.environ.get("FLUXV2_KEEP_TINT") != "1":
+            with display_lock():
+                restore_display()
         try:
-            if self._lock_socket is not None:
-                try:
-                    self._lock_socket.close()
-                except Exception:
-                    pass
-                try:
-                    os.unlink(lock_socket_path())
-                except OSError:
-                    pass
+            self._release_lock()
             if self._tray_icon is not None:
                 try:
                     self._tray_icon.stop()
@@ -304,48 +329,90 @@ class FluxApp(ctk.CTk):
             pass
         self._apply_after_id = None
 
-    def run_redshift(self, temp=None, reset=False, disable=False):
-        """Apply, reset, or turn the tint off."""
-        ok, err = apply_temperature(
-            temp=None if reset or disable else (temp if temp is not None else self.current_temp),
-            reset=reset,
-            disable=disable,
-        )
-        self._color_active = ok and not reset and not disable
-        return ok, err
+    def _submit(self, temp, quiet):
+        """Apply temp on a worker. Status stays off until that call succeeds."""
+        self._cancel_apply()
+        self._apply_gen += 1
+        gen = self._apply_gen
+        self.status_label.configure(text=f"Setting {temp}K…", text_color=WARNING)
+        threading.Thread(
+            target=self._apply_worker, args=(gen, temp, quiet), daemon=True
+        ).start()
+
+    def _apply_worker(self, gen, temp, quiet):
+        with display_lock():
+            if gen != self._apply_gen or self._quitting:
+                return
+            try:
+                ok, err = set_temperature(temp)
+            except Exception as exc:
+                ok, err = False, str(exc)
+            note = consume_note()
+        self._post_ui(lambda: self._finish_set(gen, temp, ok, err, note, quiet))
+
+    def _finish_set(self, gen, temp, ok, err, note, quiet):
+        if self._quitting or gen != self._apply_gen:
+            return
+        if not ok:
+            # Leave _applied_temp alone. A failed call does not mean the
+            # previous ramp is gone, and the status must not say Off or On.
+            self.status_label.configure(
+                text=self._short_error(err), text_color=ERROR_COLOR
+            )
+            if not quiet:
+                messagebox.showerror("Error", err or "Could not change the screen", parent=self)
+            return
+        self._applied_temp = temp
+        self._set_temp_label(temp)
+        text = f"On: {temp}K" if temp != DEFAULT_TEMP else f"On: {temp}K, neutral"
+        if note:
+            text = f"{text} — {note}"
+        self.status_label.configure(text=text, text_color=SUCCESS)
 
     @staticmethod
     def _short_error(error):
-        text = " ".join((error or "Unknown error").split())
-        if len(text) > 72:
-            text = text[:69] + "..."
-        return text
-
-    def _apply_redshift(self):
-        success, error = self.run_redshift(temp=self.current_temp)
-        if success:
-            self.status_label.configure(
-                text=f"Active: {self.current_temp}K", text_color=SUCCESS
-            )
-            return
-        messagebox.showerror("Error", error)
-        self.status_label.configure(
-            text=self._short_error(error), text_color=ERROR_COLOR
-        )
+        return " ".join((error or "Unknown error").split())
 
     def reset_temperature(self):
-        success, error = self.run_redshift(reset=True)
-        if not success:
-            messagebox.showerror("Error", error)
-            return
-        self.status_label.configure(text="Reset to normal", text_color=TEXT_SECONDARY)
+        """Apply 6500K. That is an identity ramp, not a restore."""
         self.slider.set(DEFAULT_TEMP)
         self._set_temp_label(DEFAULT_TEMP)
         self.current_temp = DEFAULT_TEMP
+        self._submit(DEFAULT_TEMP, quiet=False)
 
-    def disable_redshift(self):
-        success, error = self.run_redshift(disable=True)
-        if success:
-            self.status_label.configure(text="Color temperature off", text_color=WARNING)
-        else:
-            messagebox.showerror("Error", error)
+    def turn_off(self):
+        """Remove our ramp and restore the screen from before the first apply."""
+        self._cancel_apply()
+        self._apply_gen += 1
+        gen = self._apply_gen
+        self.status_label.configure(text="Turning off…", text_color=WARNING)
+        threading.Thread(target=self._off_worker, args=(gen,), daemon=True).start()
+
+    def _off_worker(self, gen):
+        with display_lock():
+            if gen != self._apply_gen or self._quitting:
+                return
+            try:
+                ok, err = restore_display()
+            except Exception as exc:
+                ok, err = False, str(exc)
+            note = consume_note()
+        self._post_ui(lambda: self._finish_off(gen, ok, err, note))
+
+    def _finish_off(self, gen, ok, err, note):
+        if self._quitting or gen != self._apply_gen:
+            return
+        if not ok:
+            messagebox.showerror("Error", err or "Could not restore the screen", parent=self)
+            self.status_label.configure(
+                text=self._short_error(err), text_color=ERROR_COLOR
+            )
+            return
+        self._applied_temp = None
+        self.slider.set(DEFAULT_TEMP)
+        self.current_temp = DEFAULT_TEMP
+        self.temp_display.configure(text="Off", text_color=TEXT_SECONDARY)
+        text = "Off"
+        if note:
+            text = f"Off — {note}"
+        self.status_label.configure(text=text, text_color=TEXT_SECONDARY)

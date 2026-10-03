@@ -11,8 +11,9 @@
   <description>
     <p>
       Flux v2 sets the color temperature of the screen from a dark desktop
-      window. It applies its own gamma ramps and does not need redshift
-      or Night Light.
+      window. It writes its own gamma ramps. wlroots compositors and KDE
+      Plasma are supported. GNOME Wayland is not, because it exposes no
+      gamma protocol. An X11 session needs XRandR.
     </p>
   </description>
   <launchable type="desktop-id">io.github.Bistor1.FluxV2.desktop</launchable>

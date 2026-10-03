@@ -12,7 +12,7 @@ The original author of the unpublished v1 of Flux is: "CartoonRacoon"
 - **Modern UI**: Dark theme with warm-to-cool gradient accents (orange `#f59e0b` ↔ blue `#3b82f6`), large temperature display that recolors with the temperature
 - **Live Slider**: Moving the slider applies the temperature automatically (~350 ms after you stop dragging) — no need to click Apply
 - **Quick Presets**: From Daylight (6500K) to Deep Red (1800K) in a clean 2×4 grid
-- **Color temperature**: Same Redshift gamma ramp on every output. 6500K is neutral. No redshift package and no Night Light
+- **Color temperature**: Our own gamma ramps, the same factors on every output. 6500K is an identity ramp, not "off". No redshift package and no Night Light
 - **Actions**: Reset to normal, turn the tint off
 - **System Tray**: Minimizes to tray on window close; tray menu offers **Open** and **Quit** (requires `pystray`, auto-installed on first run)
 - **Single Instance**: Launching a second time brings the running window to the front instead of creating a duplicate tray icon
@@ -25,9 +25,10 @@ The original author of the unpublished v1 of Flux is: "CartoonRacoon"
 ## Requirements
 
 - Linux (Debian/Ubuntu recommended)
-- A Wayland session, or X11 with XRandR
+- One of: a wlroots compositor (Sway, Hyprland, niri, …), KDE Plasma with output-management v8 or newer, or an X11 session with XRandR
+- GNOME Wayland is not supported. It does not expose a gamma protocol, and Flux does not drive Night Light
 - Python 3.11+
-- `python3-venv`, `python3-tk`, `python3-pil`, `python3-gi`, `gir1.2-gtk-3.0`
+- `python3-venv`, `python3-tk`, `libwayland-client0`, `liblcms2-2` (KDE profiles), `libxrandr2` (X11)
 
 ## Installation
 
@@ -54,15 +55,15 @@ In VS Code, quit and reopen the editor once so the Python debugger is allowed to
 
 ## Usage
 
-1. Drag the **slider** → temperature applies automatically when you release it
-2. Or click a **preset** → applies that temperature instantly
-3. **Reset to Normal** → restore default screen temperature
-4. **Turn Off** → remove the tint
-5. **Close window (X)** → minimizes to the system tray
-6. **Tray menu** → Open (or double-click the tray icon), or Quit Flux v2 completely
+1. Drag the **slider** → that temperature is applied about 350 ms after you stop dragging
+2. Or click a **preset** → applies that temperature
+3. **Neutral (6500K)** → apply an identity ramp. This does not restore a profile you had before Flux
+4. **Turn Off** → remove Flux's ramp and restore the screen from before the first apply
+5. **Close window (X)** → hides the window. The tint stays until you quit
+6. **Tray menu** → Open (or double-click the tray icon), or Quit Flux v2 completely (the tint is removed)
 7. **Launching again** while it's running → brings the existing window forward
 
-Status is shown live (Active / Reset / Disabled). The temperature display recolors from warm (low K) to cool (high K).
+The big number is the selected temperature, or **Off** when nothing is applied. Status is the claim about the screen: `Off`, `Setting 3000K…`, or `On: 3000K`. A failed apply does not say On.
 
 ### Via Flatpak
 
@@ -95,10 +96,11 @@ Generates `fluxv2_2.0.17_amd64.deb`. `fpm` is used when it is installed; otherwi
 ## Technical Details
 
 - **UI Framework**: CustomTkinter (dark mode) for main app; pure `tkinter` for the setup wizard (so it can install customtkinter itself)
-- **Layout**: `main.py` is the entry point. The window, tray, color backends, and single-instance socket live in the `fluxv2` package
+- **Layout**: `main.py` is the entry point. The window, tray, color backends, and single-instance lock live in the `fluxv2` package
+- **Backends**: `zwlr_gamma_control_v1` on wlroots, a KDE ICC profile with our VCGT on Plasma, XRandR gamma on X11. The connection stays open while a wlroots ramp is applied, because disconnecting restores the previous gamma
 - **Icon Generation**: PIL — circular red → orange → blue gradient via `fluxv2/icon.py` (`gen_icon.py` writes it during the build)
-- **Launcher**: Creates venv and installs dependencies automatically if needed; falls back to setup wizard for first run
-- **Single-Instance**: Unix-domain IPC socket at `~/.local/state/fluxv2/fluxv2.sock`; second launch sends `SHOW` to the existing instance and exits
+- **Launcher**: Creates venv and installs `requirements.txt` if needed; falls back to the setup wizard for first run
+- **Single-Instance**: flock plus a Unix socket at `~/.local/state/fluxv2/fluxv2.sock`; a second launch sends `SHOW` and exits
 - **Logging**: `~/.local/state/fluxv2/fluxv2.log`
 
 ## License
