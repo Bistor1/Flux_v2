@@ -4,10 +4,15 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+
+# Running this file directly puts fluxv2/ on sys.path, not the project root.
+if __name__ == "__main__" and not __package__:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fluxv2 import __version__
 
@@ -177,3 +182,19 @@ def relaunch_command():
     if os.path.isfile(launcher) and os.access(launcher, os.X_OK):
         return [launcher]
     return None
+
+
+def main():
+    release = fetch_latest()
+    if release is None:
+        print("Could not check for updates.", file=sys.stderr)
+        return 1
+    if is_newer(release.version, __version__):
+        print(f"Update available: {release.version} (installed: {__version__})")
+        return 0
+    print(f"Flux v2 {__version__} is up to date.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

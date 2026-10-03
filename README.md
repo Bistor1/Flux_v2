@@ -50,6 +50,8 @@ pip install -r requirements.txt
 python main.py
 ```
 
+In VS Code, quit and reopen the editor once so the Python debugger is allowed to start, then press F5 (**Flux v2**). That uses `.venv` and the sources in the tree, so you do not need to rebuild the Flatpak. Until then, **Terminal → Run Task → Flux v2** (or Ctrl+Shift+B) starts the same command.
+
 ## Usage
 
 1. Drag the **slider** → temperature applies automatically when you release it

@@ -7,7 +7,9 @@ finish-args:
   - --share=ipc
   - --share=network
   - --talk-name=org.freedesktop.Flatpak
-  - --socket=fallback-x11
+  # Tk 8.6 and pystray's X11 tray need a real DISPLAY. fallback-x11
+  # withholds the X11 socket on Wayland, so the app dies on startup.
+  - --socket=x11
   - --socket=wayland
   - --socket=session-bus
   - --device=dri

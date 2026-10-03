@@ -6,7 +6,9 @@ import threading
 try:
     import pystray
     PYSTRAY_AVAILABLE = True
-except ImportError:
+except Exception:
+    # pystray's X11 backend connects to DISPLAY at import time and raises
+    # DisplayNameError (not ImportError) when the socket is missing.
     pystray = None
     PYSTRAY_AVAILABLE = False
 
