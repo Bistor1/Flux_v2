@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-VERSION="2.0.15"
+VERSION="2.0.17"
 PACKAGE_NAME="fluxv2"
 OUTPUT_FILE="${PACKAGE_NAME}_${VERSION}_amd64.deb"
 
@@ -66,7 +66,7 @@ Terminal=false
 Type=Application
 Categories=Utility;Settings;
 StartupNotify=true
-Keywords=color;temperature;redshift;screen;light;night;
+Keywords=color;temperature;screen;light;night;
 EOF
 
 # --- Robust launcher script ---
@@ -102,12 +102,6 @@ show_error() {
 log "=== $APP_NAME starting ==="
 
 # --- System checks ---
-# redshift is optional: on KDE, main.py talks to KWin Night Light.
-# Warn only; do not block launch.
-if ! command -v redshift &>/dev/null && ! command -v gammastep &>/dev/null; then
-    log "redshift/gammastep not installed; expecting KWin Night Light or a later install."
-fi
-
 if ! python3 -m venv --help &>/dev/null; then
     show_error "python3-venv is not installed.
 Please run: sudo apt install python3-venv"
@@ -224,7 +218,7 @@ Depends: python3, python3-venv, python3-tk, python3-pil, zenity, python3-gi, gir
 License: MIT
 Description: Modern color temperature control
  Flux v2 sets the screen color temperature from a desktop slider.
- On KDE it talks to KWin. Elsewhere it can call redshift or gammastep.
+ It applies its own gamma ramps and does not need redshift or Night Light.
 EOF
     cp "$POSTINST" "$ctrl/postinst"
     chmod 755 "$ctrl/postinst"

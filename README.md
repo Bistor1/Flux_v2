@@ -1,6 +1,6 @@
 # Flux v2
 
-Modern screen color temperature control for Linux using Redshift.
+Modern screen color temperature control for Linux.
 
 A clean, modern GUI built with CustomTkinter — dark theme, live slider, and a temperature-gradient logo.
 
@@ -12,8 +12,8 @@ The original author of the unpublished v1 of Flux is: "CartoonRacoon"
 - **Modern UI**: Dark theme with warm-to-cool gradient accents (orange `#f59e0b` ↔ blue `#3b82f6`), large temperature display that recolors with the temperature
 - **Live Slider**: Moving the slider applies the temperature automatically (~350 ms after you stop dragging) — no need to click Apply
 - **Quick Presets**: From Daylight (6500K) to Deep Red (1800K) in a clean 2×4 grid
-- **Color temperature**: On KDE, talks to KWin Night Light over D-Bus (no extra package). Elsewhere controls `redshift` or `gammastep` via CLI (one-shot mode)
-- **Actions**: Reset to normal, disable Redshift
+- **Color temperature**: Same Redshift gamma ramp on every output. 6500K is neutral. No redshift package and no Night Light
+- **Actions**: Reset to normal, turn the tint off
 - **System Tray**: Minimizes to tray on window close; tray menu offers **Open** and **Quit** (requires `pystray`, auto-installed on first run)
 - **Single Instance**: Launching a second time brings the running window to the front instead of creating a duplicate tray icon
 - **Updates**: On startup, checks GitHub for a newer release and asks "Do you want to update?" before installing it
@@ -25,7 +25,7 @@ The original author of the unpublished v1 of Flux is: "CartoonRacoon"
 ## Requirements
 
 - Linux (Debian/Ubuntu recommended)
-- KDE Plasma (KWin Night Light), or `redshift` / `gammastep` installed
+- A Wayland session, or X11 with XRandR
 - Python 3.11+
 - `python3-venv`, `python3-tk`, `python3-pil`, `python3-gi`, `gir1.2-gtk-3.0`
 
@@ -34,7 +34,7 @@ The original author of the unpublished v1 of Flux is: "CartoonRacoon"
 ### Via .deb package (recommended)
 
 ```bash
-sudo dpkg -i fluxv2_2.0.15_amd64.deb
+sudo dpkg -i fluxv2_2.0.17_amd64.deb
 sudo apt install -f
 ```
 
@@ -57,7 +57,7 @@ In VS Code, quit and reopen the editor once so the Python debugger is allowed to
 1. Drag the **slider** → temperature applies automatically when you release it
 2. Or click a **preset** → applies that temperature instantly
 3. **Reset to Normal** → restore default screen temperature
-4. **Disable Redshift** → turn Redshift off completely
+4. **Turn Off** → remove the tint
 5. **Close window (X)** → minimizes to the system tray
 6. **Tray menu** → Open (or double-click the tray icon), or Quit Flux v2 completely
 7. **Launching again** while it's running → brings the existing window forward
@@ -68,7 +68,7 @@ Status is shown live (Active / Reset / Disabled). The temperature display recolo
 
 ```bash
 ./build_flatpak.sh
-flatpak install --user fluxv2_2.0.15.flatpak
+flatpak install --user fluxv2_2.0.17.flatpak
 ```
 
 Or install from a local build directory:
@@ -90,7 +90,7 @@ flatpak run --filesystem="$(pwd)" --share=network org.flatpak.Builder \
 ./build_deb.sh
 ```
 
-Generates `fluxv2_2.0.15_amd64.deb`. `fpm` is used when it is installed; otherwise the script packs the archive with `ar` and `tar`.
+Generates `fluxv2_2.0.17_amd64.deb`. `fpm` is used when it is installed; otherwise the script packs the archive with `ar` and `tar`.
 
 ## Technical Details
 

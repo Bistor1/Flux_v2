@@ -136,7 +136,7 @@ def _actions(app, parent):
         command=app.reset_temperature,
     ).pack(side="left", expand=True, padx=(0, 8), fill="x")
     ctk.CTkButton(
-        frame, text="Disable Redshift",
+        frame, text="Turn Off",
         font=ctk.CTkFont(size=14, weight="bold"),
         height=44, corner_radius=12,
         fg_color="#3a1f1f", hover_color="#5c2d2d",

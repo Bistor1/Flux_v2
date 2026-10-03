@@ -23,10 +23,10 @@ def _require_gui():
 def main():
     _require_gui()
     from fluxv2.app import FluxApp
-    from fluxv2.backend import install_kwin_restore_hook
+    from fluxv2.backend import install_restore_hook
     from fluxv2.instance import lock_socket_path, single_instance_or_signal
 
-    install_kwin_restore_hook()
+    install_restore_hook()
 
     lock = single_instance_or_signal()
     if lock is None:

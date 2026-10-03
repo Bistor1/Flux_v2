@@ -11,14 +11,16 @@
   <description>
     <p>
       Flux v2 sets the color temperature of the screen from a dark desktop
-      window. On KDE it talks to KWin Night Light. Elsewhere it can call
-      redshift or gammastep.
+      window. It applies its own gamma ramps and does not need redshift
+      or Night Light.
     </p>
   </description>
   <launchable type="desktop-id">io.github.Bistor1.FluxV2.desktop</launchable>
   <url type="homepage">https://github.com/Bistor1/Flux_v2</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="2.0.17" date="2026-10-03"/>
+    <release version="2.0.16" date="2026-10-03"/>
     <release version="2.0.15" date="2026-10-02"/>
     <release version="2.0.14" date="2026-10-02"/>
     <release version="2.0.13" date="2026-10-02"/>

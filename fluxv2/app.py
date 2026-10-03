@@ -12,12 +12,7 @@ import time
 import customtkinter as ctk
 from tkinter import PhotoImage, messagebox
 
-from fluxv2.backend import (
-    detect_color_backend,
-    kwin_release,
-    kwin_set_temperature,
-    run_cli,
-)
+from fluxv2.backend import apply_temperature, color_control_available
 from fluxv2.icon import PIL_AVAILABLE, Image, create_icon
 from fluxv2.instance import lock_socket_path, serve_show
 from fluxv2.theme import (
@@ -54,9 +49,8 @@ class FluxApp(ctk.CTk):
         self._lock_socket = lock_socket
         # Workers must not call self.after(). They push callables here.
         self._ui_queue = queue.Queue()
-        self._backend = None
         self._apply_after_id = None
-        self._kwin_hold = None
+        self._color_active = False
         self._update_declined = False
         self._update_busy = False
         self._update_prompted = False
@@ -203,16 +197,12 @@ class FluxApp(ctk.CTk):
             print(f"Warning: Could not set window icon: {exc}", file=sys.stderr)
 
     def _check_backend(self):
-        self._backend = detect_color_backend()
-        if self._backend is not None:
+        if color_control_available():
             return
         messagebox.showwarning(
             "No color control",
-            "Flux v2 could not find a way to set the screen temperature.\n\n"
-            "On KDE, KWin Night Light is used automatically.\n"
-            "Otherwise install redshift or gammastep:\n"
-            "  sudo pacman -S redshift\n"
-            "  sudo apt install redshift",
+            "Flux v2 could not find a display to tint.\n\n"
+            "A Wayland session or an X11 session with XRandR is required.",
         )
 
     def _setup_tray(self):
@@ -284,8 +274,9 @@ class FluxApp(ctk.CTk):
     def _really_quit(self):
         self._quitting = True
         self._cancel_apply()
-        if self._kwin_hold is not None:
-            self._kwin_release()
+        if self._color_active:
+            apply_temperature(reset=True)
+            self._color_active = False
         try:
             if self._lock_socket is not None:
                 try:
@@ -313,42 +304,15 @@ class FluxApp(ctk.CTk):
             pass
         self._apply_after_id = None
 
-    def _kwin_hold_temp(self, temp):
-        ok, err = kwin_set_temperature(temp)
-        if ok:
-            self._kwin_hold = int(temp)
-        return ok, err
-
-    def _kwin_release(self):
-        self._kwin_hold = None
-        return kwin_release()
-
-    def _cli_backend_bin(self):
-        if self._backend == "gammastep":
-            return "gammastep"
-        return "redshift"
-
     def run_redshift(self, temp=None, reset=False, disable=False):
-        """Apply, reset, or disable. Name kept; KDE uses KWin, not redshift."""
-        if self._backend is None:
-            self._backend = detect_color_backend()
-        if self._backend is None:
-            return False, (
-                "No color backend. On KDE, KWin Night Light is required. "
-                "Elsewhere install redshift or gammastep."
-            )
-        if self._backend == "kwin":
-            if reset or disable:
-                return self._kwin_release()
-            return self._kwin_hold_temp(temp if temp is not None else self.current_temp)
-        if self._kwin_hold is not None:
-            self._kwin_release()
-        return run_cli(
-            self._cli_backend_bin(),
-            temp=temp,
+        """Apply, reset, or turn the tint off."""
+        ok, err = apply_temperature(
+            temp=None if reset or disable else (temp if temp is not None else self.current_temp),
             reset=reset,
             disable=disable,
         )
+        self._color_active = ok and not reset and not disable
+        return ok, err
 
     @staticmethod
     def _short_error(error):
@@ -382,6 +346,6 @@ class FluxApp(ctk.CTk):
     def disable_redshift(self):
         success, error = self.run_redshift(disable=True)
         if success:
-            self.status_label.configure(text="Redshift disabled", text_color=WARNING)
+            self.status_label.configure(text="Color temperature off", text_color=WARNING)
         else:
             messagebox.showerror("Error", error)
