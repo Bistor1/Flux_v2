@@ -35,7 +35,7 @@ The original author of the unpublished v1 of Flux is: "CartoonRacoon"
 ### Via .deb package (recommended)
 
 ```bash
-sudo dpkg -i fluxv2_2.0.17_amd64.deb
+sudo dpkg -i fluxv2_2.0.18_amd64.deb
 sudo apt install -f
 ```
 
@@ -69,7 +69,7 @@ The big number is the selected temperature, or **Off** when nothing is applied. 
 
 ```bash
 ./build_flatpak.sh
-flatpak install --user fluxv2_2.0.17.flatpak
+flatpak install --user fluxv2_2.0.18.flatpak
 ```
 
 Or install from a local build directory:
@@ -91,7 +91,7 @@ flatpak run --filesystem="$(pwd)" --share=network org.flatpak.Builder \
 ./build_deb.sh
 ```
 
-Generates `fluxv2_2.0.17_amd64.deb`. `fpm` is used when it is installed; otherwise the script packs the archive with `ar` and `tar`.
+Generates `fluxv2_2.0.18_amd64.deb`. `fpm` is used when it is installed; otherwise the script packs the archive with `ar` and `tar`.
 
 ## Technical Details
 

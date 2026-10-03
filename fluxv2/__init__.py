@@ -1,3 +1,3 @@
 """Flux v2 — screen color temperature control."""
 
-__version__ = "2.0.17"
+__version__ = "2.0.18"

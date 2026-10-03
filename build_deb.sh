@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-VERSION="2.0.17"
+VERSION="2.0.18"
 PACKAGE_NAME="fluxv2"
 OUTPUT_FILE="${PACKAGE_NAME}_${VERSION}_amd64.deb"
 
