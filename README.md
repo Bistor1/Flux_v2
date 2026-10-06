@@ -55,16 +55,7 @@ In VS Code, quit and reopen the editor once so the Python debugger is allowed to
 
 ## Usage
 
-1. Drag the **slider** → that temperature is applied about 350 ms after you stop dragging
-2. Or click a **preset** → applies that temperature
-3. **Neutral (6500K)** → apply an identity ramp. This does not restore a profile you had before Flux
-4. **Turn Off** → remove Flux's ramp and restore the screen from before the first apply
-5. **Close window (X)** → hides the window. The tint stays until you quit
-6. **Tray menu** → Open (or double-click the tray icon), or Quit Flux v2 completely (the tint is removed)
-7. **Launching again** while it's running → brings the existing window forward
-
-The big number is the selected temperature, or **Off** when nothing is applied. Status is the claim about the screen: `Off`, `Setting 3000K…`, or `On: 3000K`. A failed apply does not say On.
-
+Self exlpaining, if thw window launches ;)
 ### Via Flatpak
 
 ```bash
