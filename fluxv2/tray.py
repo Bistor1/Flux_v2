@@ -137,10 +137,14 @@ def start_tray(image, on_open, on_quit):
     )
 
     docked = threading.Event()
+    running = threading.Event()
     failed = []
 
     def _runner():
         try:
+            # Set before run() so the watchdog can tell "still starting up"
+            # from "already finished", which is the only safe thing to stop on.
+            running.set()
             icon.run(setup=lambda i: docked.set())
         except BaseException as exc:
             failed.append(exc)
@@ -151,12 +155,18 @@ def start_tray(image, on_open, on_quit):
         # The default setup thread pystray spawns is where a failed dock
         # surfaces, and it dies before run() returns. This waits on our own
         # event instead, so the verdict cannot be lost to that race.
-        if docked.wait(5.0) and not failed:
+        #
+        # A slow dock is not a failure. Waiting on `docked` alone stopped
+        # healthy trays whose manager took longer than the timeout to hand
+        # back an XEmbed socket, so stop only once run() has really ended.
+        if not running.wait(5.0):
             return
-        try:
-            icon.stop()
-        except Exception:
-            pass
+        thread.join()
+        if failed:
+            try:
+                icon.stop()
+            except Exception:
+                pass
 
     thread = threading.Thread(target=_runner, daemon=True, name="fluxv2-tray")
     thread.start()

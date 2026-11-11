@@ -171,6 +171,52 @@ class TestStartTray:
         assert started["thread"] == TRAY_THREAD_NAME
         handle.stop()
 
+    def test_slow_dock_is_not_treated_as_a_failure(self, monkeypatch):
+        # A tray manager can take longer than the watchdog window to hand back
+        # an XEmbed socket. Killing it there turns a working tray into a dead
+        # one, so the watchdog may only stop an icon whose run() has returned.
+        icons = []
+
+        class SlowIcon:
+            HAS_MENU = True
+
+            def __init__(self):
+                self.stopped = False
+                self.entered = threading.Event()
+
+            def run(self, setup=None):
+                self.entered.set()
+                time.sleep(20)
+
+            def stop(self):
+                self.stopped = True
+
+        class FakeMenu:
+            SEPARATOR = None
+
+            def __init__(self, *a, **k):
+                pass
+
+        def make_icon(*a, **k):
+            icon = SlowIcon()
+            icons.append(icon)
+            return icon
+
+        fake = type("fake_pystray", (), {})
+        fake.Menu = FakeMenu
+        fake.MenuItem = lambda *a, **k: None
+        fake.Icon = make_icon
+        monkeypatch.setattr(tray, "pystray", fake)
+        monkeypatch.setattr(tray, "PYSTRAY_AVAILABLE", True)
+
+        handle = tray.start_tray(object(), lambda: None, lambda: None)
+        assert icons[0].entered.wait(5)
+        # Past the old 5s timeout, with the loop still healthy and undocked.
+        time.sleep(6.0)
+        assert icons[0].stopped is False
+        assert handle.error is None
+        handle.stop()
+
 
 class TestThreadGuard:
     def test_tray_thread_crash_keeps_the_process_alive(self, capsys):

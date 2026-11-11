@@ -23,7 +23,8 @@ class _CIExyYTriple(Structure):
     _fields_ = [("Red", _CIExyY), ("Green", _CIExyY), ("Blue", _CIExyY)]
 
 
-# Redshift's blackbody table, 1000K through 25100K in 100K steps.
+# Redshift's blackbody table, 1000K through 10000K in 100K steps. Upstream
+# runs to 25100K; this copy stops at the cool end Flux can actually reach.
 # 6500K is exactly (1, 1, 1). The old Tanner Helland curve is not, and the
 # CIE piecewise fit jumps at 2222K and 4000K, so the slider felt uneven.
 _BLACKBODY = (
@@ -122,8 +123,13 @@ _BLACKBODY = (
 
 
 def channel_factors(temp):
-    """Redshift RGB multipliers. 6500K is (1, 1, 1). Same factors on every output."""
-    clamped = max(1000.0, min(25100.0, float(temp)))
+    """Redshift RGB multipliers. 6500K is (1, 1, 1). Same factors on every output.
+
+    Clamped to the table, not to the UI range: a caller asking for 25000K
+    gets the coolest colour the table defines rather than an extrapolation.
+    """
+    last = 1000.0 + 100.0 * (len(_BLACKBODY) - 1)
+    clamped = max(1000.0, min(last, float(temp)))
     position = (clamped - 1000.0) / 100.0
     index = int(position)
     if index >= len(_BLACKBODY) - 1:
