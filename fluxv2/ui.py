@@ -13,6 +13,7 @@ from fluxv2.theme import (
     PRESETS,
     TEXT_SECONDARY,
 )
+from fluxv2.tray import menu_is_rendered, tray_usable
 
 
 def build(app):
@@ -24,13 +25,26 @@ def build(app):
     _slider(app, main)
     _presets(app, main)
     _actions(app, main)
+    _quit(app, main)
     ctk.CTkLabel(
         main,
-        text="Neutral sets 6500K. Turn Off restores the screen from before Flux. Close hides to the tray.",
+        text=_hint_text(),
         font=ctk.CTkFont(size=11),
         text_color=TEXT_SECONDARY,
         wraplength=500,
     ).pack(pady=(0, 14), padx=30)
+
+
+def _hint_text():
+    if tray_usable():
+        return (
+            "Neutral sets 6500K. Turn Off restores the screen from before Flux. "
+            "Close hides to the tray."
+        )
+    return (
+        "Neutral sets 6500K. Turn Off restores the screen from before Flux. "
+        "No system tray here, so Close minimises and Quit exits."
+    )
 
 
 def _header(parent):
@@ -143,3 +157,18 @@ def _actions(app, parent):
         fg_color="#3a1f1f", hover_color="#5c2d2d",
         command=app.turn_off,
     ).pack(side="right", expand=True, padx=(8, 0), fill="x")
+
+
+def _quit(app, parent):
+    """Always offered. The X11 tray renders no menu, so its Quit item is
+    unreachable and a Wayland session has no tray at all."""
+    if tray_usable() and menu_is_rendered():
+        return
+    ctk.CTkButton(
+        parent, text="Quit",
+        font=ctk.CTkFont(size=12, weight="bold"),
+        height=30, width=110, corner_radius=10,
+        fg_color="#252525", hover_color="#3a3a3a",
+        border_color="#333333", border_width=1,
+        command=app.quit_from_button,
+    ).pack(pady=(0, 6))

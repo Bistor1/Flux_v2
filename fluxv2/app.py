@@ -30,10 +30,21 @@ from fluxv2.theme import (
     WARNING,
     temp_accent_hex,
 )
-from fluxv2.tray import PYSTRAY_AVAILABLE, notify, start_tray
+from fluxv2.tray import (
+    PYSTRAY_AVAILABLE,
+    menu_is_rendered,
+    notify,
+    start_tray,
+    tray_reason,
+    tray_usable,
+)
 from fluxv2.ui import build as build_ui
 from fluxv2.update import current_is_outdated, install_release, relaunch_command
 from fluxv2 import __version__
+
+
+TRAY_THREAD_NAME = "fluxv2-tray"
+_TRAY_THREAD_GUARD = False
 
 
 class FluxApp(ctk.CTk):
@@ -53,6 +64,7 @@ class FluxApp(ctk.CTk):
         self._icon_photo = None  # PhotoImage must stay referenced or Tk segfaults
         self._app_icon_img = None
         self._tray_icon = None
+        self._tray_live = False
         self._quitting = False
         self._lock = lock
         # Workers must not call self.after(). They push callables here.
@@ -229,12 +241,23 @@ class FluxApp(ctk.CTk):
         self._submit(temp, quiet=True)
 
     def _setup_tray(self):
+        # pystray runs its loop on a thread we do not control. If it dies there
+        # the default excepthook prints a traceback and, depending on the
+        # interpreter, hands the error to os._exit() -- which would end the
+        # process without restore_display(), leaving the screen tinted. The
+        # tray must never be able to take the app down with it.
+        self._install_thread_guard()
         if not PYSTRAY_AVAILABLE:
             print("Warning: pystray is not installed. System tray disabled.", file=sys.stderr)
             notify("Flux v2", "pystray not installed — system tray disabled.")
             return
         if not PIL_AVAILABLE:
             print("Warning: PIL not installed. Cannot create tray icon.", file=sys.stderr)
+            return
+        if not tray_usable():
+            reason = tray_reason()
+            print(f"Warning: System tray disabled: {reason}", file=sys.stderr)
+            notify("Flux v2", f"System tray unavailable — {reason}")
             return
         try:
             icon_img = create_icon(64)
@@ -246,9 +269,59 @@ class FluxApp(ctk.CTk):
                 on_open=lambda: self._post_ui(self._show_window),
                 on_quit=self._quit_from_tray,
             )
+            if self._tray_icon is None:
+                return
+            # Docking fails asynchronously, so the outcome is checked away from
+            # startup and the status line is corrected once it is known.
+            self.after(600, self._check_tray)
         except Exception as exc:
             print(f"Warning: Could not set up system tray: {exc}", file=sys.stderr)
             self._tray_icon = None
+
+    @staticmethod
+    def _install_thread_guard():
+        global _TRAY_THREAD_GUARD
+        if _TRAY_THREAD_GUARD:
+            return
+        _TRAY_THREAD_GUARD = True
+        previous = threading.excepthook
+
+        def _hook(args):
+            # A tray thread is the only one of ours that can reach this, and it
+            # is already torn down by then. Keep the process alive so the
+            # window still restores the display on quit.
+            if getattr(args.thread, "name", "") == TRAY_THREAD_NAME:
+                print(
+                    f"Warning: tray thread crashed: {args.exc_value}",
+                    file=sys.stderr,
+                )
+                return
+            previous(args)
+
+        threading.excepthook = _hook
+
+    def _check_tray(self):
+        if self._quitting or self._tray_icon is None:
+            return
+        error = self._tray_icon.error
+        if error is None:
+            self._tray_live = True
+            if not menu_is_rendered():
+                print(
+                    "Warning: the tray backend shows only the default action; "
+                    "use the Quit button to exit.",
+                    file=sys.stderr,
+                )
+            return
+        reason = str(error) or "the tray loop stopped"
+        print(f"Warning: System tray unavailable: {reason}", file=sys.stderr)
+        notify("Flux v2", f"System tray unavailable — {reason}")
+        try:
+            self._tray_icon.stop()
+        except Exception:
+            pass
+        self._tray_icon = None
+        self._tray_live = False
 
     def _quit_from_tray(self):
         """Tray thread. Do not touch Tk here."""
@@ -292,7 +365,18 @@ class FluxApp(ctk.CTk):
         ).start()
 
     def _on_close(self):
-        self.withdraw()
+        if self._tray_live:
+            self.withdraw()
+            return
+        # Hiding with no tray leaves nothing to bring the window back and no
+        # way to quit, so the process could only be killed. Killing it skips
+        # restore_display() and strands the tint on the screen.
+        self.iconify()
+
+    def quit_from_button(self):
+        """Quit button on the Tk thread."""
+        self._quitting = True
+        self._really_quit()
 
     def _release_lock(self):
         if self._lock is None:
