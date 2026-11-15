@@ -78,6 +78,8 @@ flatpak run --filesystem="$(pwd)" --share=network org.flatpak.Builder \
 
 `build.sh` builds the `.deb`, the Arch package when `makepkg` is available, and the Flatpak bundle when Flatpak is available.
 
+The Rust rewrite is in `rust/`. It is a separate binary (`fluxv2-rs`) and does not replace the installed package. See `rust/README.md`.
+
 ```bash
 ./build_deb.sh
 ```
