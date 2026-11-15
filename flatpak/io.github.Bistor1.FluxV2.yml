@@ -15,6 +15,7 @@ finish-args:
   - --device=dri
   - --talk-name=org.kde.KWin
   - --talk-name=org.freedesktop.Notifications
+  # SNI tray needs python3-gi and an AppIndicator typelib, which this runtime does not bundle. The .deb depends on them.
   - --talk-name=org.kde.StatusNotifierWatcher
 modules:
   - name: tcl-tk

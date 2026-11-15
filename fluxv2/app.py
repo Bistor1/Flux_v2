@@ -16,10 +16,12 @@ from fluxv2.backend import (
     consume_note,
     describe_control,
     display_lock,
+    exit_requested,
     restore_display,
     saved_temperature,
     set_temperature,
 )
+from fluxv2.display import init_x11_threads
 from fluxv2.icon import PIL_AVAILABLE, Image, create_icon
 from fluxv2.instance import serve_show
 from fluxv2.theme import (
@@ -39,7 +41,14 @@ from fluxv2.tray import (
     tray_usable,
 )
 from fluxv2.ui import build as build_ui
-from fluxv2.update import current_is_outdated, install_release, relaunch_command
+from fluxv2.ui import ensure_quit_button, no_tray_hint
+from fluxv2.update import (
+    current_is_outdated,
+    install_release,
+    installable,
+    relaunch_command,
+    updates_enabled,
+)
 from fluxv2 import __version__
 
 
@@ -51,13 +60,15 @@ class FluxApp(ctk.CTk):
     _APPLY_DEBOUNCE_MS = 350
 
     def __init__(self, lock=None):
+        init_x11_threads()
         ctk.set_appearance_mode("dark")
         # className sets WM_CLASS so Alt+Tab shows "FluxV2" instead of "tk".
         super().__init__(className="FluxV2")
 
         self.title("Flux v2")
         self.geometry("560x760")
-        self.resizable(False, False)
+        self.minsize(560, 640)
+        self.resizable(False, True)
 
         self.current_temp = DEFAULT_TEMP
         self._applied_temp = None
@@ -84,9 +95,21 @@ class FluxApp(ctk.CTk):
         self.after(200, self._resume_saved)
         self.after(1500, self._start_update_check)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.after(0, self._fit_work_area)
+
+    def _fit_work_area(self):
+        """Keep Quit on screen. The window may grow taller; it must not start clipped."""
+        try:
+            screen = self.winfo_screenheight()
+            height = self.winfo_height()
+        except Exception:
+            return
+        limit = max(640, screen - 80)
+        if height > limit:
+            self.geometry(f"560x{limit}")
 
     def _start_update_check(self):
-        if os.environ.get("FLUXV2_NO_UPDATE"):
+        if not updates_enabled():
             return
         threading.Thread(target=self._update_loop, daemon=True).start()
 
@@ -98,7 +121,7 @@ class FluxApp(ctk.CTk):
                 except Exception as exc:
                     print(f"Warning: update check failed: {exc}", file=sys.stderr)
                     release = None
-                if release is not None and not self._update_prompted:
+                if release is not None and installable(release) and not self._update_prompted:
                     self._update_prompted = True
                     self._post_ui(lambda rel=release: self._ask_update(rel))
             for _ in range(30 * 60):
@@ -141,6 +164,7 @@ class FluxApp(ctk.CTk):
         self._post_ui(lambda e=err: self._update_failed(e))
 
     def _update_failed(self, error):
+        self._update_prompted = False
         self.status_label.configure(
             text=self._short_error(error), text_color=ERROR_COLOR
         )
@@ -322,6 +346,9 @@ class FluxApp(ctk.CTk):
             pass
         self._tray_icon = None
         self._tray_live = False
+        ensure_quit_button(self)
+        if getattr(self, "hint_label", None) is not None:
+            self.hint_label.configure(text=no_tray_hint())
 
     def _quit_from_tray(self):
         """Tray thread. Do not touch Tk here."""
@@ -332,6 +359,9 @@ class FluxApp(ctk.CTk):
         self._ui_queue.put(callback)
 
     def _poll_ui_queue(self):
+        if exit_requested() and not self._quitting:
+            self._really_quit()
+            return
         try:
             while True:
                 callback = self._ui_queue.get_nowait()

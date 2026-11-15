@@ -19,17 +19,24 @@ def _require_gui():
         sys.exit(1)
 
 
-def main():
+def run():
+    """Own the instance, then restore a leftover tint. A second launch must not."""
     _require_gui()
     from fluxv2.app import FluxApp
-    from fluxv2.backend import install_restore_hook
+    from fluxv2.backend import install_exit_signals, install_restore_hook
+    from fluxv2.display import init_x11_threads
     from fluxv2.instance import single_instance_or_signal
 
-    install_restore_hook()
-
+    # Before Tk and before any XOpenDisplay. A secondary process may call this
+    # too; it does not connect to the display.
+    init_x11_threads()
     lock = single_instance_or_signal()
     if lock is None:
         sys.exit(0)
+    # Before the restore hook, so a logout during startup sets the flag
+    # instead of killing the process mid-restore.
+    install_exit_signals()
+    install_restore_hook()
     try:
         FluxApp(lock=lock).mainloop()
     finally:
@@ -37,6 +44,10 @@ def main():
             lock.close()
         except Exception:
             pass
+
+
+def main():
+    run()
 
 
 if __name__ == "__main__":

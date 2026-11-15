@@ -1,5 +1,6 @@
 """Check GitHub releases and install a newer package if the user agrees."""
 
+import hashlib
 import json
 import os
 import shutil
@@ -32,6 +33,7 @@ class Release:
     version: str
     deb_url: str | None
     flatpak_url: str | None
+    digest: str | None = None
 
 
 def parse_version(text):
@@ -73,6 +75,8 @@ def fetch_latest(timeout=15):
         return None
     deb_url = None
     flatpak_url = None
+    deb_digest = None
+    flatpak_digest = None
     for asset in payload.get("assets") or []:
         name = asset.get("name") or ""
         url = asset.get("browser_download_url") or ""
@@ -80,14 +84,51 @@ def fetch_latest(timeout=15):
             continue
         if name == f"fluxv2_{version}_amd64.deb":
             deb_url = url
+            deb_digest = _digest_hex(asset.get("digest"))
         elif name == f"fluxv2_{version}.flatpak":
             flatpak_url = url
-    return Release(version=version, deb_url=deb_url, flatpak_url=flatpak_url)
+            flatpak_digest = _digest_hex(asset.get("digest"))
+    digest = flatpak_digest if _in_flatpak() else deb_digest
+    return Release(
+        version=version,
+        deb_url=deb_url,
+        flatpak_url=flatpak_url,
+        digest=digest,
+    )
+
+
+def _digest_hex(value):
+    if not isinstance(value, str) or not value.lower().startswith("sha256:"):
+        return None
+    hexpart = value.split(":", 1)[1].strip().lower()
+    if len(hexpart) != 64 or any(char not in "0123456789abcdef" for char in hexpart):
+        return None
+    return hexpart
+
+
+def updates_enabled():
+    """False for a source checkout or when FLUXV2_NO_UPDATE is set."""
+    if os.environ.get("FLUXV2_NO_UPDATE"):
+        return False
+    if os.environ.get("FLATPAK_ID"):
+        return True
+    argv0 = os.path.realpath(sys.argv[0])
+    return argv0 in ("/usr/share/fluxv2/main.py", "/usr/bin/fluxv2")
+
+
+def installable(release):
+    """True when this process can verify and install the release."""
+    if release is None or not release.digest:
+        return False
+    url = release.flatpak_url if _in_flatpak() else release.deb_url
+    return bool(url) and _safe_url(url)
 
 
 def current_is_outdated():
     release = fetch_latest()
     if release is None or not is_newer(release.version, __version__):
+        return None
+    if not installable(release):
         return None
     return release
 
@@ -125,6 +166,36 @@ def _private_dir():
     return directory
 
 
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _digest_matches(path, expected):
+    if not expected:
+        return False
+    return _sha256_file(path).lower() == expected.lower()
+
+
+def _remote_digest_matches(path, expected):
+    """Hash a file that may live on the host outside the Flatpak sandbox."""
+    if not expected:
+        return False
+    if not _in_flatpak():
+        return _digest_matches(path, expected)
+    try:
+        result = _host(["sha256sum", path], timeout=60)
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    if result.returncode != 0:
+        return False
+    got = (result.stdout or "").split()
+    return bool(got) and got[0].lower() == expected.lower()
+
+
 def _download(url, dest):
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with _opener().open(request, timeout=120) as response, open(dest, "wb") as handle:
@@ -145,6 +216,8 @@ def install_release(release):
 def _install_deb(release):
     if not release.deb_url:
         return False, "The release has no .deb package."
+    if not release.digest:
+        return False, "The release has no sha256 digest."
     directory = _private_dir()
     path = os.path.join(directory, f"fluxv2_{release.version}_amd64.deb")
     try:
@@ -152,6 +225,9 @@ def _install_deb(release):
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         shutil.rmtree(directory, ignore_errors=True)
         return False, f"Download failed: {exc}"
+    if not _digest_matches(path, release.digest):
+        shutil.rmtree(directory, ignore_errors=True)
+        return False, "The download digest did not match the release."
     installer = "pkexec" if shutil.which("pkexec") else "sudo"
     if not shutil.which(installer) or not shutil.which("dpkg"):
         return False, f"Downloaded to {path}. Install it with: sudo dpkg -i {path}"
@@ -175,6 +251,8 @@ def _install_deb(release):
 def _install_flatpak(release):
     if not release.flatpak_url:
         return False, "The release has no Flatpak bundle."
+    if not release.digest:
+        return False, "The release has no sha256 digest."
     if not _safe_url(release.flatpak_url):
         return False, "The download URL is not on an allowed host."
     parent = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
@@ -202,6 +280,8 @@ def _install_flatpak(release):
         final_url = (result.stdout or "").strip()
         if not _safe_url(final_url):
             return False, "The download was redirected to a host Flux will not use."
+        if not _remote_digest_matches(dest, release.digest):
+            return False, "The download digest did not match the release."
         result = _host(
             ["flatpak", "install", "--user", "--noninteractive", "--or-update", dest],
             timeout=180,

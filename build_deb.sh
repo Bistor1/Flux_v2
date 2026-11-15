@@ -193,6 +193,8 @@ build_with_fpm() {
         --depends "liblcms2-2" \
         --depends "libwayland-client0" \
         --depends "libxrandr2" \
+        --depends "python3-gi" \
+        --depends "gir1.2-ayatanaappindicator3-0.1" \
         --after-install "$POSTINST" \
         -C "$BUILD_DIR" \
         --exclude "postinst" \
@@ -215,7 +217,7 @@ Maintainer: Bistor1 <bistorhunt@gmail.com>
 Section: utils
 Priority: optional
 Installed-Size: ${size}
-Depends: python3, python3-venv, python3-tk, python3-pil, zenity, liblcms2-2, libwayland-client0, libxrandr2
+Depends: python3, python3-venv, python3-tk, python3-pil, zenity, liblcms2-2, libwayland-client0, libxrandr2, python3-gi, gir1.2-ayatanaappindicator3-0.1
 License: MIT
 Description: Modern color temperature control
  Flux v2 sets the screen color temperature from a desktop slider.

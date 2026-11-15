@@ -8,7 +8,7 @@ DEFAULT_TEMP = 6500
 
 PRESETS = [
     (6500, "Daylight"),
-    (5500, "Neutral"),
+    (5500, "Paper"),
     (4200, "Cool White"),
     (3400, "Evening"),
     (3000, "Cozy"),

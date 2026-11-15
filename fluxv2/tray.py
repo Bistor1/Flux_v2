@@ -50,12 +50,14 @@ def tray_usable():
     """
     if not PYSTRAY_AVAILABLE:
         return False
-    if os.environ.get("PYSTRAY_BACKEND") == "dummy":
+    if os.environ.get("PYSTRAY_BACKEND") == "dummy" or TRAY_BACKEND_NAME.endswith("_dummy"):
         return False
     if sys.platform in ("darwin", "win32"):
         return True
     if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
-        return False
+        # XEmbed cannot dock on Wayland. AppIndicator and GTK register a
+        # StatusNotifierItem on the session bus, which KDE does show.
+        return TRAY_BACKEND_NAME.endswith(("_appindicator", "_gtk"))
     if TRAY_BACKEND_NAME.endswith("_xorg"):
         # XEmbed needs an X socket *and* a tray manager to dock into. Under
         # XWayland DISPLAY is set, so the socket alone proves nothing.
@@ -71,9 +73,9 @@ def tray_reason():
         return _IMPORT_ERROR or "pystray is not installed"
     if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
         return (
-            f"the tray backend ({TRAY_BACKEND_NAME}) cannot reach a Wayland session; "
-            "KDE shows StatusNotifierItem icons, which pystray does not "
-            "implement"
+            f"the tray backend ({TRAY_BACKEND_NAME}) is XEmbed and cannot reach "
+            "a Wayland session. A StatusNotifier icon needs PyGObject plus an "
+            "AppIndicator typelib (AyatanaAppIndicator3 or AppIndicator3)"
         )
     if not os.environ.get("DISPLAY"):
         return "no X11 DISPLAY is set"

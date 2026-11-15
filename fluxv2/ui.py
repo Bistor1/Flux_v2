@@ -20,19 +20,28 @@ def build(app):
     """Fill the window. Sets app.temp_display, app.status_label, app.slider."""
     main = ctk.CTkFrame(app, fg_color=BG_COLOR, corner_radius=0)
     main.pack(fill="both", expand=True)
+    app._ui_root = main
     _header(main)
     _display(app, main)
     _slider(app, main)
     _presets(app, main)
     _actions(app, main)
     _quit(app, main)
-    ctk.CTkLabel(
+    app.hint_label = ctk.CTkLabel(
         main,
         text=_hint_text(),
         font=ctk.CTkFont(size=11),
         text_color=TEXT_SECONDARY,
         wraplength=500,
-    ).pack(pady=(0, 14), padx=30)
+    )
+    app.hint_label.pack(pady=(0, 14), padx=30)
+
+
+def no_tray_hint():
+    return (
+        "Neutral sets 6500K. Turn Off restores the screen from before Flux. "
+        "No system tray here, so Close minimises and Quit exits."
+    )
 
 
 def _hint_text():
@@ -41,10 +50,7 @@ def _hint_text():
             "Neutral sets 6500K. Turn Off restores the screen from before Flux. "
             "Close hides to the tray."
         )
-    return (
-        "Neutral sets 6500K. Turn Off restores the screen from before Flux. "
-        "No system tray here, so Close minimises and Quit exits."
-    )
+    return no_tray_hint()
 
 
 def _header(parent):
@@ -160,15 +166,29 @@ def _actions(app, parent):
 
 
 def _quit(app, parent):
-    """Always offered. The X11 tray renders no menu, so its Quit item is
-    unreachable and a Wayland session has no tray at all."""
+    """Always offered when the tray menu cannot be the way out."""
     if tray_usable() and menu_is_rendered():
         return
-    ctk.CTkButton(
+    ensure_quit_button(app)
+
+
+def ensure_quit_button(app):
+    """Pack Quit once. A tray that dies after layout still needs this."""
+    if getattr(app, "_quit_button", None) is not None:
+        return app._quit_button
+    parent = getattr(app, "_ui_root", app)
+    button = ctk.CTkButton(
         parent, text="Quit",
         font=ctk.CTkFont(size=12, weight="bold"),
         height=30, width=110, corner_radius=10,
         fg_color="#252525", hover_color="#3a3a3a",
         border_color="#333333", border_width=1,
         command=app.quit_from_button,
-    ).pack(pady=(0, 6))
+    )
+    hint = getattr(app, "hint_label", None)
+    if hint is not None:
+        button.pack(pady=(0, 6), before=hint)
+    else:
+        button.pack(pady=(0, 6))
+    app._quit_button = button
+    return button

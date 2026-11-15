@@ -29,12 +29,23 @@ class TestBackendProbe:
         # __init__ deletes the backend() helper, so this is the only handle.
         assert tray.TRAY_BACKEND_NAME.startswith("pystray.")
 
-    def test_wayland_is_rejected_even_with_a_display(self, clean_env):
+    def test_wayland_xembed_is_rejected_even_with_a_display(self, clean_env, monkeypatch):
         # XWayland always sets DISPLAY, so the socket proves nothing.
+        monkeypatch.setattr(tray, "TRAY_BACKEND_NAME", "pystray._xorg")
         clean_env.setenv("XDG_SESSION_TYPE", "wayland")
         clean_env.setenv("DISPLAY", ":0")
         assert tray.tray_usable() is False
         assert "Wayland" in tray.tray_reason()
+        assert "StatusNotifier" in tray.tray_reason()
+
+    @pytest.mark.parametrize("backend", ["pystray._appindicator", "pystray._gtk"])
+    def test_wayland_dbus_backend_is_a_tray(self, clean_env, monkeypatch, backend):
+        monkeypatch.setattr(tray, "TRAY_BACKEND_NAME", backend)
+        monkeypatch.setattr(tray, "PYSTRAY_AVAILABLE", True)
+        clean_env.setenv("XDG_SESSION_TYPE", "wayland")
+        clean_env.setenv("DISPLAY", ":0")
+        assert tray.tray_usable() is True
+        assert tray.tray_reason() == ""
 
     def test_x11_with_display_is_accepted(self, clean_env):
         clean_env.setenv("XDG_SESSION_TYPE", "x11")

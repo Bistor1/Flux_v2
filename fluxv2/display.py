@@ -34,15 +34,19 @@ from fluxv2.gamma import ramp_bytes, temperature_ramps, write_temperature_profil
 
 # kde_output_configuration_v2 request opcodes. New requests are appended, so
 # these stay valid. set_icc_profile_path is 16 (since v6), set_color_profile_source
-# is 19 (since v8), apply is 5.
+# is 19 (since v8), apply is 5. HDR profile requests arrived with v21.
 _SET_ICC = 16
 _SET_SOURCE = 19
+_SET_HDR_ICC = 30
+_SET_HDR_SOURCE = 31
 _APPLY = 5
 _SOURCE_SRGB = 0
 _SOURCE_ICC = 1
 _ICC_MIN_VERSION = 8
+_HDR_REQUEST_MIN = 21
 _DEVICE_REGISTRY_MIN = 21
 _WL_MARSHAL_FLAG_DESTROY = 1
+_x11_threads_ready = False
 
 _lock = threading.RLock()
 _session = None
@@ -106,6 +110,45 @@ def _load(name):
         return CDLL(name)
     except OSError:
         return None
+
+
+def init_x11_threads():
+    """Call XInitThreads once, before any other Xlib use. No-op if libX11 is missing."""
+    global _x11_threads_ready
+    if _x11_threads_ready:
+        return
+    lib = _load("libX11.so.6")
+    if lib is None:
+        return
+    lib.XInitThreads.restype = c_int
+    lib.XInitThreads()
+    _x11_threads_ready = True
+
+
+def pending_output_names(known, bound_ids):
+    """Registry names in `known` that are not yet bound. `known` is (name, version)."""
+    bound = set(bound_ids)
+    return [name for name, _version in known if name not in bound]
+
+
+def prune_temperature_profiles(keep_path):
+    """Delete Flux temperature profiles except `keep_path`. Never leaves profile_dir()."""
+    directory = os.path.realpath(profile_dir())
+    keep = os.path.realpath(keep_path) if keep_path else ""
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return
+    for name in names:
+        if not (name.startswith("temperature-") and name.endswith(".icc")):
+            continue
+        path = os.path.realpath(os.path.join(directory, name))
+        if os.path.dirname(path) != directory or path == keep:
+            continue
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
 
 def _messages(rows):
@@ -256,6 +299,7 @@ class Display:
         self._management = None
         self._gamma_mgr = None
         self._outputs = []
+        self._output_ids = []
         self._output_names = []
         self._config_iface = None
         self._gamma_iface = None
@@ -264,6 +308,7 @@ class Display:
         self._failure = ""
         self.kind = None
         self.unavailable = ""
+        self.broken = False
 
     def connect(self):
         if self.lib is None:
@@ -297,7 +342,7 @@ class Display:
         self._registry = lib.wl_proxy_marshal_flags(
             self.display, 1, registry_iface, version, 0
         )
-        self._listen(self._registry, ("usu", "u"), self._on_global, None)
+        self._listen(self._registry, ("usu", "u"), self._on_global, self._on_global_remove)
         if lib.wl_display_roundtrip(self.display) < 0:
             raise OSError("Wayland roundtrip failed")
         self._bind_known()
@@ -312,6 +357,7 @@ class Display:
             except Exception:
                 pass
         self.display = None
+        self.broken = True
         self._gamma_controls = []
 
     def _choose_kind(self):
@@ -360,6 +406,17 @@ class Display:
         self.globals[text] = (int(name), int(version))
         if text == "wl_output":
             self._output_names.append((int(name), int(version)))
+
+    def _on_global_remove(self, _data, _proxy, name):
+        name = int(name)
+        self._output_names = [item for item in self._output_names if item[0] != name]
+        if name not in self._output_ids:
+            return
+        index = self._output_ids.index(name)
+        output = self._outputs[index]
+        self._destroy_gamma_for(output)
+        del self._outputs[index]
+        del self._output_ids[index]
 
     def _bind(self, interface_name, iface, version, minimum=1):
         found = self.globals.get(interface_name)
@@ -449,24 +506,58 @@ class Display:
         self._keep.extend((gamma, manager))
         self._gamma_iface = gamma
         self._gamma_mgr = self._bind("zwlr_gamma_control_manager_v1", manager, 1)
-        if not (self._gamma_mgr and "wl_output" in self.globals):
-            return
+        self._bind_new_outputs()
+
+    def _bind_new_outputs(self):
+        """Bind wl_output globals that arrived after the last bind. Do not rebind."""
+        if not self._gamma_mgr or not self._registry or self.lib is None or not self.display:
+            return []
+        if "wl_output" not in self.globals:
+            return []
         output_iface = c_void_p(cast(
             byref(_Interface.in_dll(self.lib, "wl_output_interface")), c_void_p
         ).value)
+        added = []
         for out_name, out_version in self._output_names:
+            if out_name in self._output_ids:
+                continue
+            use = min(4, out_version)
             proxy = self.lib.wl_proxy_marshal_flags(
                 self._registry,
                 0,
                 output_iface,
-                min(4, out_version),
+                use,
                 0,
                 c_uint32(out_name),
                 c_char_p(b"wl_output"),
-                c_uint32(min(4, out_version)),
+                c_uint32(use),
                 None,
             )
+            if not proxy:
+                continue
             self._outputs.append(proxy)
+            self._output_ids.append(out_name)
+            added.append(proxy)
+        return added
+
+    def _destroy_gamma_for(self, output):
+        """Destroy one output's gamma object. Leave every other ramp alone."""
+        kept = []
+        for item in self._gamma_controls:
+            if item.get("output") != output:
+                kept.append(item)
+                continue
+            try:
+                self.lib.wl_proxy_marshal_flags(
+                    item["proxy"], 1, None, 1, _WL_MARSHAL_FLAG_DESTROY
+                )
+            except Exception:
+                pass
+        self._gamma_controls = kept
+
+    def mark_broken(self):
+        self.broken = True
+        return False
 
     def _on_output(self, _data, _registry, device):
         info = {
@@ -477,6 +568,8 @@ class Display:
             "icc": "",
             "source": _SOURCE_SRGB,
             "hdr": 0,
+            "hdr_icc": "",
+            "hdr_source": _SOURCE_SRGB,
         }
         self.devices[device] = info
 
@@ -499,19 +592,28 @@ class Display:
         handlers[15] = remember("hdr")
         handlers[19] = remember("icc", decode=True)
         handlers[23] = remember("source")
+        handlers[36] = self._on_device_removed
+        handlers[37] = remember("hdr_icc", decode=True)
+        handlers[38] = remember("hdr_source")
         self._listen(device, sigs, *handlers)
+
+    def _on_device_removed(self, _data, proxy):
+        self.devices.pop(proxy, None)
 
     def enabled_devices(self):
         return [item for item in self.devices.values() if item["enabled"]]
 
     def apply_marked(self):
-        """Send ICC changes only for devices that have _set_icc. Others stay put."""
+        """Send ICC changes only for devices that have a pending mark. Others stay put."""
         if self._management is None or self._config_iface is None:
             return False, "This compositor has no output configuration protocol"
         version = int(self.lib.wl_proxy_get_version(self._management))
         if version < _ICC_MIN_VERSION:
             return False, self.unavailable or "KWin cannot select an ICC profile"
-        devices = [item for item in self.enabled_devices() if "_set_icc" in item]
+        devices = [
+            item for item in self.enabled_devices()
+            if "_set_icc" in item or "_set_hdr_icc" in item
+        ]
         if not devices:
             return True, ""
         config = self.lib.wl_proxy_marshal_flags(
@@ -529,18 +631,31 @@ class Display:
         self._listen(config, ("", "", "s"), self._on_applied, self._on_failed, self._on_reason)
         for item in devices:
             proxy = c_void_p(item["proxy"])
-            self.lib.wl_proxy_marshal_flags(
-                config, _SET_ICC, None, version, 0, proxy,
-                c_char_p(item["_set_icc"].encode()),
-            )
-            self.lib.wl_proxy_marshal_flags(
-                config, _SET_SOURCE, None, version, 0, proxy,
-                c_uint32(int(item["_set_source"])),
-            )
-            item.pop("_set_icc", None)
-            item.pop("_set_source", None)
+            if "_set_icc" in item:
+                self.lib.wl_proxy_marshal_flags(
+                    config, _SET_ICC, None, version, 0, proxy,
+                    c_char_p(item["_set_icc"].encode()),
+                )
+                self.lib.wl_proxy_marshal_flags(
+                    config, _SET_SOURCE, None, version, 0, proxy,
+                    c_uint32(int(item["_set_source"])),
+                )
+                item.pop("_set_icc", None)
+                item.pop("_set_source", None)
+            if "_set_hdr_icc" in item and version >= _HDR_REQUEST_MIN:
+                self.lib.wl_proxy_marshal_flags(
+                    config, _SET_HDR_ICC, None, version, 0, proxy,
+                    c_char_p(item["_set_hdr_icc"].encode()),
+                )
+                self.lib.wl_proxy_marshal_flags(
+                    config, _SET_HDR_SOURCE, None, version, 0, proxy,
+                    c_uint32(int(item["_set_hdr_source"])),
+                )
+            item.pop("_set_hdr_icc", None)
+            item.pop("_set_hdr_source", None)
         self.lib.wl_proxy_marshal_flags(config, _APPLY, None, version, 0)
         if self.lib.wl_display_roundtrip(self.display) < 0:
+            self.mark_broken()
             return False, self._failure or "Wayland rejected the color profile"
         applied = self._applied is True
         failure = self._failure
@@ -566,14 +681,40 @@ class Display:
     def _on_reason(self, _data, _proxy, reason):
         self._failure = reason.decode() if reason else "output configuration failed"
 
-    def ensure_gamma(self):
-        if any(not item["failed"] for item in self._gamma_controls):
+    def ensure_gamma(self, _retry=True):
+        self._bind_new_outputs()
+        live = [item for item in self._gamma_controls if not item["failed"]]
+        have = {item.get("output") for item in live}
+        missing = [output for output in self._outputs if output not in have]
+        if live and not missing:
             return True, ""
-        self.release_gamma()
-        if not self._gamma_mgr or not self._outputs:
+        if not live:
+            # A failed control must not be destroyed just because another
+            # output appeared. Releasing here is only the all-failed path.
+            self.release_gamma()
+            missing = list(self._outputs)
+        if not self._gamma_mgr or not missing:
+            if live:
+                return True, ""
             return False, "This compositor has no wlroots gamma control"
+        controls = self._open_gamma(missing)
+        if self.broken:
+            return False, "Wayland roundtrip failed"
+        accepted = [item for item in controls if item["size"] >= 2 and not item["failed"]]
+        self._gamma_controls = live + accepted
+        if self._gamma_controls:
+            return True, ""
+        if _retry and not self.broken:
+            self.release_gamma()
+            return self.ensure_gamma(_retry=False)
+        return False, (
+            "No output accepted gamma control. Another program may already "
+            "own it, or this output has no gamma ramp."
+        )
+
+    def _open_gamma(self, outputs):
         controls = []
-        for output in self._outputs:
+        for output in outputs:
             gamma = self.lib.wl_proxy_marshal_flags(
                 self._gamma_mgr,
                 0,
@@ -584,7 +725,7 @@ class Display:
             )
             if not gamma:
                 continue
-            info = {"proxy": gamma, "size": 0, "failed": False}
+            info = {"proxy": gamma, "size": 0, "failed": False, "output": output}
             controls.append(info)
 
             def on_size(_d, _proxy, size, item=info):
@@ -595,17 +736,10 @@ class Display:
 
             self._listen(gamma, ("u", ""), on_size, on_failed)
         if self.lib.wl_display_roundtrip(self.display) < 0:
-            return False, "Wayland roundtrip failed"
-        live = [item for item in controls if item["size"] >= 2 and not item["failed"]]
-        if not live:
-            return False, (
-                "No output accepted gamma control. Another program may already "
-                "own it, or this output has no gamma ramp."
-            )
-        self._gamma_controls = live
-        return True, ""
+            self.mark_broken()
+        return controls
 
-    def write_gamma(self, temp):
+    def write_gamma(self, temp, _retry=True):
         sent = []
         applied = 0
         for item in self._gamma_controls:
@@ -621,17 +755,28 @@ class Display:
                 self.lib.wl_proxy_marshal_flags(item["proxy"], 0, None, 1, 0, int(fd))
                 # libwayland duplicates the fd when the buffer is flushed.
                 if self.lib.wl_display_flush(self.display) < 0:
+                    self.mark_broken()
                     return False, "Wayland flush failed"
             finally:
                 os.close(fd)
             sent.append(item)
         if self.lib.wl_display_roundtrip(self.display) < 0:
+            self.mark_broken()
             return False, "Wayland rejected the gamma ramp"
         for item in sent:
             if not item["failed"]:
                 applied += 1
         total = len(self._gamma_controls)
         if applied == 0:
+            if _retry and not self.broken:
+                self.release_gamma()
+                ok, err = self.ensure_gamma()
+                if not ok:
+                    return False, err or (
+                        "The compositor rejected the gamma ramp. Another program may "
+                        "already control it."
+                    )
+                return self.write_gamma(temp, _retry=False)
             return False, (
                 "The compositor rejected the gamma ramp. Another program may "
                 "already control it."
@@ -761,7 +906,9 @@ class Session:
         self._x11 = None
         self._randr = None
         self._x_error = False
+        self._watch_x_errors = False
         self._x_handler = None
+        self._prev_x_handler = None
 
     def ensure(self):
         if os.environ.get("WAYLAND_DISPLAY"):
@@ -770,14 +917,38 @@ class Session:
             return self._ensure_x11()
         return None, "No display. Flux needs a Wayland session or X11 with XRandR."
 
+    def drop_wayland(self):
+        """Close a Wayland client that can no longer be used."""
+        if self.wayland is not None:
+            self.wayland.close()
+            self.wayland = None
+
+    def _note_broken(self):
+        if self.wayland is not None and self.wayland.broken:
+            self.drop_wayland()
+
+    def _drain(self, client):
+        """Dispatch queued events, then bind outputs that just appeared."""
+        if client is None or client.lib is None or not client.display:
+            return False, "Wayland connection lost"
+        if client.lib.wl_display_roundtrip(client.display) < 0:
+            client.mark_broken()
+            self.drop_wayland()
+            return False, "Wayland connection lost"
+        client._bind_new_outputs()
+        return True, ""
+
     def _ensure_wayland(self):
-        if self.wayland is not None and self.wayland.display and self.wayland.kind:
+        if self.wayland is not None and self.wayland.broken:
+            self.drop_wayland()
+        if self.wayland is not None and self.wayland.display and self.wayland.kind and not self.wayland.broken:
             return self.wayland.kind, ""
         if self.wayland is not None:
             reason = self.wayland.unavailable
+            broken = self.wayland.broken
             self.wayland.close()
             self.wayland = None
-            if reason:
+            if reason and not broken:
                 return None, reason
         client = Display()
         try:
@@ -791,6 +962,7 @@ class Session:
         return None, client.unavailable or "This compositor cannot set a gamma ramp"
 
     def _ensure_x11(self):
+        init_x11_threads()
         if self._xdisplay:
             return "x11", ""
         x11 = _load("libX11.so.6")
@@ -840,13 +1012,20 @@ class Session:
     def _install_x_handler(self):
         if self._x_handler is not None:
             return
+        handler_type = CFUNCTYPE(c_int, c_void_p, c_void_p)
 
-        def on_error(_display, _event):
-            self._x_error = True
+        def on_error(display, event):
+            if self._watch_x_errors:
+                self._x_error = True
+            previous = self._prev_x_handler
+            if previous:
+                return previous(display, event)
             return 0
 
-        self._x_handler = CFUNCTYPE(c_int, c_void_p, c_void_p)(on_error)
-        self._x11.XSetErrorHandler(cast(self._x_handler, c_void_p))
+        self._x_handler = handler_type(on_error)
+        previous = self._x11.XSetErrorHandler(cast(self._x_handler, c_void_p))
+        # Keep the previous handler alive and call it, or Tk's X errors vanish.
+        self._prev_x_handler = handler_type(previous) if previous else None
 
     def apply(self, temp):
         _set_note("")
@@ -855,10 +1034,13 @@ class Session:
             return False, err
         temp = int(temp)
         if kind == "wlr":
-            return self._apply_wlr(temp)
-        if kind == "icc":
-            return self._apply_icc(temp)
-        return self._apply_x11(temp)
+            result = self._apply_wlr(temp)
+        elif kind == "icc":
+            result = self._apply_icc(temp)
+        else:
+            result = self._apply_x11(temp)
+        self._note_broken()
+        return result
 
     def restore(self):
         """Remove our tint. Does not touch a profile or ramp we did not set."""
@@ -881,7 +1063,9 @@ class Session:
             if saved and saved.get("kind") not in ("icc", None):
                 _clear_state()
                 return True, ""
-            return self._restore_icc(saved)
+            result = self._restore_icc(saved)
+            self._note_broken()
+            return result
         if os.environ.get("DISPLAY"):
             if not saved or saved.get("kind") != "x11":
                 if saved:
@@ -893,6 +1077,9 @@ class Session:
         return True, ""
 
     def _apply_wlr(self, temp):
+        ok, err = self._drain(self.wayland)
+        if not ok:
+            return False, err
         ok, err = self.wayland.ensure_gamma()
         if not ok:
             return False, err
@@ -908,9 +1095,9 @@ class Session:
 
     def _apply_icc(self, temp):
         client = self.wayland
-        if not client.enabled_devices() and client.devices:
-            if client.lib.wl_display_roundtrip(client.display) < 0:
-                return False, "Wayland roundtrip failed"
+        ok, err = self._drain(client)
+        if not ok:
+            return False, err
         devices = client.enabled_devices()
         if not devices:
             return False, "No enabled outputs"
@@ -918,6 +1105,8 @@ class Session:
         if saved is None or saved.get("kind") != "icc":
             saved = {"kind": "icc", "outputs": _snapshot_icc(devices)}
             _write_state(saved)
+        else:
+            _fill_hdr_snapshot(saved, devices)
         path = profile_path(temp)
         try:
             write_temperature_profile(path, temp)
@@ -925,15 +1114,24 @@ class Session:
             if "liblcms2" in str(exc):
                 return False, "liblcms2.so.2 is not installed. Install the liblcms2-2 package."
             return False, str(exc)
+        version = int(client.lib.wl_proxy_get_version(client._management))
+        hdr_set = []
         for item in devices:
             item["_set_icc"] = path
             item["_set_source"] = _SOURCE_ICC
+            if int(item.get("hdr") or 0) and version >= _HDR_REQUEST_MIN:
+                item["_set_hdr_icc"] = path
+                item["_set_hdr_source"] = _SOURCE_ICC
+                hdr_set.append(item)
         ok, err = client.apply_marked()
         if not ok:
             return False, err
         saved["temp"] = temp
         _write_state(saved)
-        if any(int(item.get("hdr") or 0) for item in devices):
+        prune_temperature_profiles(path)
+        if hdr_set:
+            _set_note("HDR profile set as well")
+        elif any(int(item.get("hdr") or 0) for item in devices):
             _set_note("HDR is on, so this SDR profile may not change the picture")
         return True, ""
 
@@ -945,8 +1143,9 @@ class Session:
                 return False, err or "Cannot restore the KDE color profile from here"
             return True, ""
         client = self.wayland
-        if not client.enabled_devices() and client.devices:
-            client.lib.wl_display_roundtrip(client.display)
+        ok, err = self._drain(client)
+        if not ok:
+            return False, err
         by_key = {}
         for item in (saved or {}).get("outputs") or []:
             key = _output_key(item)
@@ -958,16 +1157,27 @@ class Session:
             current = device.get("icc") or ""
             if isinstance(current, bytes):
                 current = current.decode()
+            hdr_current = device.get("hdr_icc") or ""
+            if isinstance(hdr_current, bytes):
+                hdr_current = hdr_current.decode()
             if original is not None:
                 device["_set_icc"] = original.get("icc") or ""
                 device["_set_source"] = int(original.get("source", _SOURCE_SRGB))
+                if "hdr_icc" in original:
+                    device["_set_hdr_icc"] = original.get("hdr_icc") or ""
+                    device["_set_hdr_source"] = int(original.get("hdr_source", _SOURCE_SRGB))
                 changed = True
-            elif _is_our_profile(current):
+            else:
                 # State file was lost. We only remove our own file, never a
                 # profile the user set in System Settings.
-                device["_set_icc"] = ""
-                device["_set_source"] = _SOURCE_SRGB
-                changed = True
+                if _is_our_profile(current):
+                    device["_set_icc"] = ""
+                    device["_set_source"] = _SOURCE_SRGB
+                    changed = True
+                if _is_our_profile(hdr_current):
+                    device["_set_hdr_icc"] = ""
+                    device["_set_hdr_source"] = _SOURCE_SRGB
+                    changed = True
         if not changed:
             _clear_state()
             return True, ""
@@ -1034,10 +1244,14 @@ class Session:
             _copy_ramp(gamma.contents.green, green)
             _copy_ramp(gamma.contents.blue, blue)
             self._x_error = False
-            self._randr.XRRSetCrtcGamma(self._xdisplay, crtc, gamma)
-            self._x11.XSync(self._xdisplay, 0)
-            if self._x_error:
-                return "XRandR rejected the gamma ramp"
+            self._watch_x_errors = True
+            try:
+                self._randr.XRRSetCrtcGamma(self._xdisplay, crtc, gamma)
+                self._x11.XSync(self._xdisplay, 0)
+                if self._x_error:
+                    return "XRandR rejected the gamma ramp"
+            finally:
+                self._watch_x_errors = False
         finally:
             self._randr.XRRFreeGamma(gamma)
         return ""
@@ -1062,14 +1276,33 @@ class Session:
                 })
             saved = {"kind": "x11", "outputs": originals}
             _write_state(saved)
+        before = []
         for name, crtc, size in outputs:
-            red, green, blue = temperature_ramps(temp, size)
+            current = self._read_gamma(crtc, size)
+            if current is None:
+                return False, f"could not read the current gamma for {name}"
+            before.append((name, crtc, current))
+        written = []
+        for name, crtc, current in before:
+            red, green, blue = temperature_ramps(temp, len(current[0]))
             err = self._write_gamma_x(crtc, red, green, blue)
             if err:
+                failed = self._rollback_x11(written)
+                if failed:
+                    return False, f"{name}: {err}; rollback failed for {failed}"
                 return False, f"{name}: {err}"
+            written.append((name, crtc, current))
         saved["temp"] = temp
         _write_state(saved)
         return True, ""
+
+    def _rollback_x11(self, written):
+        failed = []
+        for name, crtc, ramps in reversed(written):
+            err = self._write_gamma_x(crtc, ramps[0], ramps[1], ramps[2])
+            if err:
+                failed.append(f"{name}: {err}")
+        return ", ".join(failed)
 
     def _restore_x11(self, saved):
         kind, err = self._ensure_x11()
@@ -1135,6 +1368,27 @@ def _output_key(item):
     return None
 
 
+def _fill_hdr_snapshot(saved, devices):
+    """Old state files predate HDR fields. Record them before we overwrite."""
+    fresh = {}
+    for item in _snapshot_icc(devices):
+        key = _output_key(item)
+        if key is not None:
+            fresh[key] = item
+    changed = False
+    for item in saved.get("outputs") or []:
+        if "hdr_icc" in item:
+            continue
+        found = fresh.get(_output_key(item))
+        if found is None:
+            continue
+        item["hdr_icc"] = found.get("hdr_icc") or ""
+        item["hdr_source"] = int(found.get("hdr_source", _SOURCE_SRGB))
+        changed = True
+    if changed:
+        _write_state(saved)
+
+
 def _snapshot_icc(devices):
     outputs = []
     for item in devices:
@@ -1145,11 +1399,20 @@ def _snapshot_icc(devices):
         if _is_our_profile(icc):
             icc = ""
             source = _SOURCE_SRGB
+        hdr_icc = item.get("hdr_icc") or ""
+        if isinstance(hdr_icc, bytes):
+            hdr_icc = hdr_icc.decode()
+        hdr_source = int(item.get("hdr_source") or _SOURCE_SRGB)
+        if _is_our_profile(hdr_icc):
+            hdr_icc = ""
+            hdr_source = _SOURCE_SRGB
         outputs.append({
             "uuid": item.get("uuid") or "",
             "name": item.get("name") or "",
             "icc": icc,
             "source": source,
+            "hdr_icc": hdr_icc,
+            "hdr_source": hdr_source,
         })
     return outputs
 
