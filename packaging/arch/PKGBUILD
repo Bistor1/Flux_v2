@@ -1,0 +1,69 @@
+# Maintainer: Bistor1 <bistorhunt@gmail.com>
+pkgname=fluxv2
+pkgver=2.0.19
+pkgrel=1
+pkgdesc='Modern screen color temperature control'
+arch=('any')
+url='https://github.com/Bistor1/Flux_v2'
+license=('MIT')
+depends=(
+  'python'
+  'tk'
+  'python-pillow'
+  'python-pystray'
+  'python-gobject'
+  'libayatana-appindicator'
+  'lcms2'
+  'wayland'
+  'libxrandr'
+)
+options=('!strip')
+
+package() {
+  local root="$startdir"
+  local app="$pkgdir/usr/share/fluxv2"
+  local vendor="$pkgdir/usr/lib/fluxv2/site-packages"
+
+  install -d "$app/fluxv2" \
+    "$pkgdir/usr/bin" \
+    "$pkgdir/usr/share/applications" \
+    "$pkgdir/usr/share/icons/hicolor/256x256/apps" \
+    "$pkgdir/usr/share/licenses/$pkgname" \
+    "$vendor"
+
+  install -m644 "$root/main.py" "$root/first_run.py" "$root/requirements.txt" "$app/"
+  install -m644 "$root/fluxv2/"*.py "$app/fluxv2/"
+  install -m644 "$root/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+  if [ -d "$root/vendor" ]; then
+    cp -a "$root/vendor/." "$vendor/"
+  else
+    echo "ERROR: vendor/ is missing. Run build_arch.sh, which installs CustomTkinter there." >&2
+    return 1
+  fi
+
+  if [ -f "$root/fluxv2.png" ]; then
+    install -m644 "$root/fluxv2.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/fluxv2.png"
+  fi
+
+  cat > "$pkgdir/usr/bin/fluxv2" <<'EOF'
+#!/bin/sh
+export PYTHONPATH="/usr/lib/fluxv2/site-packages${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 /usr/share/fluxv2/main.py "$@"
+EOF
+  chmod 755 "$pkgdir/usr/bin/fluxv2"
+
+  cat > "$pkgdir/usr/share/applications/fluxv2.desktop" <<'EOF'
+[Desktop Entry]
+Name=Flux v2
+Comment=Modern color temperature control
+Comment[de]=Moderne Farbtemperatur-Steuerung
+Exec=fluxv2
+Icon=fluxv2
+Terminal=false
+Type=Application
+Categories=Utility;Settings;
+StartupNotify=true
+Keywords=color;temperature;screen;light;night;
+EOF
+}

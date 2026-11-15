@@ -35,7 +35,7 @@ The original author of the unpublished v1 of Flux is: "CartoonRacoon"
 ### Via .deb package (recommended)
 
 ```bash
-sudo dpkg -i fluxv2_2.0.18_amd64.deb
+sudo dpkg -i fluxv2_2.0.19_amd64.deb
 sudo apt install -f
 ```
 
@@ -60,7 +60,7 @@ Self exlpaining, if thw window launches ;)
 
 ```bash
 ./build_flatpak.sh
-flatpak install --user fluxv2_2.0.18.flatpak
+flatpak install --user fluxv2_2.0.19.flatpak
 ```
 
 Or install from a local build directory:
@@ -76,13 +76,20 @@ flatpak run --filesystem="$(pwd)" --share=network org.flatpak.Builder \
 ./build.sh
 ```
 
-`build.sh` builds the `.deb` and, when Flatpak is available, the Flatpak bundle.
+`build.sh` builds the `.deb`, the Arch package when `makepkg` is available, and the Flatpak bundle when Flatpak is available.
 
 ```bash
 ./build_deb.sh
 ```
 
-Generates `fluxv2_2.0.18_amd64.deb`. `fpm` is used when it is installed; otherwise the script packs the archive with `ar` and `tar`.
+Generates `fluxv2_2.0.19_amd64.deb`. `fpm` is used when it is installed; otherwise the script packs the archive with `ar` and `tar`.
+
+```bash
+./build_arch.sh
+sudo pacman -U fluxv2-2.0.19-1-any.pkg.tar.zst
+```
+
+`build_arch.sh` builds an Arch package with `makepkg`. CustomTkinter is vendored, because it is not in the official repositories. Pillow, pystray, and the Wayland tray libraries are package dependencies.
 
 ## Technical Details
 

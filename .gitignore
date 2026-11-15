@@ -2,6 +2,8 @@ __pycache__/
 *.py[cod]
 *.deb
 *.flatpak
+*.pkg.tar.zst
+*.pkg.tar.xz
 .flatpak-builder/
 flatpak-build/
 flatpak-repo/
